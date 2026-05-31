@@ -336,6 +336,10 @@ export class Agent {
     try {
       await this.runInner(userMsg, signal, safeEmit);
     } catch (err) {
+      if (signal.aborted || isAbortLikeError(err)) {
+        safeEmit({ type: 'error', err: new Error('turn cancelled') });
+        return;
+      }
       logError('agent: panic in Run', { err: errMessage(err) });
       safeEmit({ type: 'error', err: err instanceof Error ? err : new Error(String(err)) });
     } finally {
@@ -690,4 +694,10 @@ function makeSafeEmit(signal: AbortSignal, emit: EventSink): EventSink {
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function isAbortLikeError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return err.name === 'AbortError' || msg === 'aborted' || msg.includes('operation was aborted');
 }

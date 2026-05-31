@@ -244,6 +244,38 @@ describe('Agent.run', () => {
     expect(events.at(-1)?.type).toBe('done');
   });
 
+  it('renders user cancellation without leaking backend abort text', async () => {
+    class AbortClient implements Client {
+      name() {
+        return 'ollama';
+      }
+      model() {
+        return 'm';
+      }
+      async chat(_req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
+        signal?.throwIfAborted();
+        throw new Error('ollama: The operation was aborted.');
+      }
+    }
+    const a = new Agent({
+      client: new AbortClient(),
+      tools: new ToolRegistry(),
+      skills: new SkillRegistry(),
+      prompter: new AlwaysAllow(),
+      store: null,
+      target: new Target(),
+    });
+    const ctl = new AbortController();
+    const { events, sink } = collect();
+    ctl.abort();
+    await a.run('x', ctl.signal, sink);
+    const errorEvent = events.find((e) => e.type === 'error');
+    expect(errorEvent && errorEvent.type === 'error' ? errorEvent.err.message : '').toBe(
+      'turn cancelled',
+    );
+    expect(events.at(-1)?.type).toBe('done');
+  });
+
   // ----- allowed-tools enforcement (Tier 1 #3) -----
 
   // A capability tool (requiresPermission=true) that the test will try
