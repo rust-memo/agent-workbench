@@ -139,6 +139,10 @@ function runWithCapture(
     const stderrChunks: Buffer[] = [];
     let stdoutLen = 0;
     let stderrLen = 0;
+    // Track every byte received (even bytes we stop retaining past the cap)
+    // so the truncation marker is deterministic regardless of chunk sizes.
+    let stdoutTotal = 0;
+    let stderrTotal = 0;
 
     // Only the first MAX_OUTPUT_BYTES of each stream are ever shown, so we
     // stop *retaining* bytes past that point. Without this, a command like
@@ -147,12 +151,14 @@ function runWithCapture(
     // We keep consuming (and discarding) data so the child isn't blocked on
     // backpressure; the timeout still bounds total runtime.
     child.stdout.on('data', (c: Buffer) => {
+      stdoutTotal += c.length;
       if (stdoutLen < MAX_OUTPUT_BYTES) {
         stdoutChunks.push(c);
         stdoutLen += c.length;
       }
     });
     child.stderr.on('data', (c: Buffer) => {
+      stderrTotal += c.length;
       if (stderrLen < MAX_OUTPUT_BYTES) {
         stderrChunks.push(c);
         stderrLen += c.length;
@@ -162,8 +168,8 @@ function runWithCapture(
     child.on('close', (code, sig) => {
       clearTimeout(timer);
       parentSignal.removeEventListener('abort', onParentAbort);
-      const stdout = truncate(Buffer.concat(stdoutChunks).toString('utf8'));
-      const stderr = truncate(Buffer.concat(stderrChunks).toString('utf8'));
+      const stdout = truncate(Buffer.concat(stdoutChunks).toString('utf8'), stdoutTotal);
+      const stderr = truncate(Buffer.concat(stderrChunks).toString('utf8'), stderrTotal);
 
       if (controller.signal.aborted && !parentSignal.aborted) {
         timedOut = true;
@@ -184,16 +190,17 @@ function runWithCapture(
     child.on('error', (err) => {
       clearTimeout(timer);
       parentSignal.removeEventListener('abort', onParentAbort);
-      const stdout = truncate(Buffer.concat(stdoutChunks).toString('utf8'));
-      const stderr = truncate(Buffer.concat(stderrChunks).toString('utf8'));
+      const stdout = truncate(Buffer.concat(stdoutChunks).toString('utf8'), stdoutTotal);
+      const stderr = truncate(Buffer.concat(stderrChunks).toString('utf8'), stderrTotal);
       resolveOut(`exit: -1\nstdout:\n${stdout}\nstderr:\n${stderr}\nerror: ${err.message}`);
     });
   });
 }
 
-function truncate(s: string): string {
-  if (s.length <= MAX_OUTPUT_BYTES) return s;
-  return `${s.slice(0, MAX_OUTPUT_BYTES)}\n[... truncated ${s.length - MAX_OUTPUT_BYTES} bytes ...]`;
+function truncate(s: string, total?: number): string {
+  const seen = total ?? s.length;
+  if (seen <= MAX_OUTPUT_BYTES) return s;
+  return `${s.slice(0, MAX_OUTPUT_BYTES)}\n[... truncated ${seen - MAX_OUTPUT_BYTES} bytes ...]`;
 }
 
 function signalToInt(sig: NodeJS.Signals): number {
