@@ -230,6 +230,48 @@ export class BrowserCaptureClearTool extends BaseCaptureTool {
   }
 }
 
+export class BrowserCaptureBurpTasksTool extends BaseCaptureTool {
+  name(): string {
+    return `${TOOL_PREFIX}burp_tasks`;
+  }
+  description(): string {
+    return 'List scan / plan / scope tasks queued from the PentesterFlow Burp extension. Use this after the user sends requests from Burp to decide what to scan or plan next.';
+  }
+  schema(): Record<string, unknown> {
+    return { type: 'object', properties: {} };
+  }
+  async run(): Promise<string> {
+    const tasks = this.store.listBurpTasks();
+    if (tasks.length === 0) return 'No Burp tasks queued.';
+    return JSON.stringify(
+      tasks.map((t) => ({ ...t, createdAt: new Date(t.createdAt).toISOString() })),
+      null,
+      2,
+    );
+  }
+}
+
+export class BrowserCaptureBurpIssuesTool extends BaseCaptureTool {
+  name(): string {
+    return `${TOOL_PREFIX}burp_issues`;
+  }
+  description(): string {
+    return 'List PentesterFlow issues exposed to the Burp extension for import into Burp Scanner issues.';
+  }
+  schema(): Record<string, unknown> {
+    return { type: 'object', properties: {} };
+  }
+  async run(): Promise<string> {
+    const issues = this.store.listBurpIssues();
+    if (issues.length === 0) return 'No PentesterFlow issues queued for Burp import.';
+    return JSON.stringify(
+      issues.map((i) => ({ ...i, createdAt: new Date(i.createdAt).toISOString() })),
+      null,
+      2,
+    );
+  }
+}
+
 export function registerBrowserCaptureTools(
   register: (t: Tool) => void,
   store: CaptureStore,
@@ -239,5 +281,7 @@ export function registerBrowserCaptureTools(
   register(new BrowserCaptureRequestsTool(store));
   register(new BrowserCaptureGetTool(store));
   register(new BrowserCaptureSnapshotTool(store));
+  register(new BrowserCaptureBurpTasksTool(store));
+  register(new BrowserCaptureBurpIssuesTool(store));
   register(new BrowserCaptureClearTool(store));
 }

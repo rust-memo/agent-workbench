@@ -8,7 +8,7 @@ export function modelReliabilityWarning(backend: Backend, model: string): string
   if ((normalizedBackend === 'ollama' || normalizedBackend === 'lmstudio') && size < 14) {
     return `⚠  model ${model}: ${formatBillions(size)} local models may not reliably emit executable tool calls. Recommended minimum: 14b locally, or 70b+ for hosted providers.`;
   }
-  if (normalizedBackend === 'openai-compat' && size < 70) {
+  if ((normalizedBackend === 'openai-compat' || normalizedBackend === 'kimi') && size < 70) {
     return `⚠  model ${model}: if this is a hosted API, sub-70b models may be unreliable for agentic tool calls. Recommended hosted size: 70b+.`;
   }
   return undefined;

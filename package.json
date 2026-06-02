@@ -16,6 +16,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/cli/index.ts",
+    "dev:burp": "tsx src/cli/index.ts --burp",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

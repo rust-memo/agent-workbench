@@ -203,7 +203,26 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
   }
 
   private encodeRequest(req: ChatRequest, stream: boolean) {
-    return {
+    const body: {
+      model: string;
+      stream: boolean;
+      messages: Array<{
+        role: string;
+        content?: string;
+        tool_calls?: unknown[];
+        tool_call_id?: string;
+        name?: string;
+      }>;
+      tools?: Array<{
+        type: 'function';
+        function: {
+          name: string;
+          description: string;
+          parameters: Record<string, unknown>;
+        };
+      }>;
+      thinking?: { type: 'disabled' };
+    } = {
       model: this.modelID,
       stream,
       messages: req.messages.map((m) => {
@@ -237,6 +256,10 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
         },
       })),
     };
+    if (this.label === 'kimi') {
+      body.thinking = { type: 'disabled' };
+    }
+    return body;
   }
 }
 

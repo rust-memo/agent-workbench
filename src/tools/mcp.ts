@@ -169,10 +169,32 @@ export class MCPTool implements Tool {
     const result = await this.session.callTool(this.remoteName, args, signal);
     const body = JSON.stringify(result.content, null, 2);
     if (result.isError) {
-      throw new Error(`mcp tool ${this.remoteName} reported isError: ${body}`);
+      throw new Error(formatMCPError(this.toolName, this.remoteName, result.content));
     }
     return body;
   }
+}
+
+function formatMCPError(toolName: string, remoteName: string, content: unknown): string {
+  const text = extractMCPText(content).trim();
+  const label = displayToolName(toolName);
+  if (text) return `${label} failed: ${text.replace(/^Error:\s*/i, '')}`;
+  return `${label} failed: ${remoteName} returned an MCP error`;
+}
+
+function extractMCPText(content: unknown): string {
+  const blocks = Array.isArray(content) ? content : [content];
+  const parts: string[] = [];
+  for (const block of blocks) {
+    if (isRecord(block) && block.type === 'text' && typeof block.text === 'string') {
+      parts.push(block.text);
+    }
+  }
+  return parts.join('\n');
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
 }
 
 /**

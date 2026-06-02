@@ -65,7 +65,7 @@ step is visible, reproducible, and easy to audit.
 | Area | What PentesterFlow provides |
 |---|---|
 | Agent loop | Plan, act, observe, verify, and report across one scoped task. |
-| Model backends | Ollama, LM Studio, and OpenAI-compatible APIs. |
+| Model backends | Ollama, LM Studio, Kimi API, and OpenAI-compatible APIs. |
 | Tooling | Shell/Bash, HTTP, file tools, search, browser capture, MCP, and finding confirmation. |
 | Skills | Markdown playbooks for recon, web vulnerabilities, SSRF, SSTI, JWT, GraphQL, race testing, takeover checks, Supabase, and deserialization. |
 | Human control | Permission prompts with allow once, allow session, deny, and explicit YOLO mode for labs. |
@@ -75,6 +75,7 @@ step is visible, reproducible, and easy to audit.
 ## Highlights
 
 - **Local by default**: run against your own model backend with no required cloud account.
+- **Hosted when needed**: switch directly to Kimi API or any OpenAI-compatible endpoint.
 - **Modern terminal UI**: compact tool calls, readable shell transcripts, skill summaries, and finding-focused output.
 - **Permission-aware execution**: approve each risky action once or for the session.
 - **Decision planner**: each normal turn gets lightweight skill selection, risk labeling, and coverage guidance before tool use.
@@ -141,11 +142,17 @@ pentesterflow --backend openai-compat \
   --base-url https://api.example.com/v1 \
   --api-key sk-...
 
+# Kimi API
+MOONSHOT_API_KEY=sk-... pentesterflow --backend kimi --model kimi-k2.6
+
 # Enable browser-capture tools for this session
 pentesterflow --browser
 
-# Start the local browser-capture ingest server
-pentesterflow --browser-ingest
+# Start the local Burp/PentesterFlow bridge
+pentesterflow --burp
+
+# From a source checkout
+npm run dev -- --burp 9999
 
 # Auto-approve tool calls for disposable lab environments only
 pentesterflow --dangerously-skip-permissions
@@ -155,13 +162,14 @@ pentesterflow --dangerously-skip-permissions
 
 | Flag | Description |
 |---|---|
-| `--backend ollama\|lmstudio\|openai-compat` | Select the LLM backend. |
+| `--backend ollama\|lmstudio\|kimi\|openai-compat` | Select the LLM backend. |
 | `--model <id>` | Set the model id. |
-| `--base-url <url>` / `--api-key <key>` | Configure an OpenAI-compatible backend. |
+| `--base-url <url>` / `--api-key <key>` | Configure Kimi or another OpenAI-compatible backend. |
 | `--skills <dirs>` | Load extra skill directories. |
 | `--resume <session-id>` | Resume a saved session. |
 | `--browser` | Enable Browser MCP tools for the current session. |
-| `--browser-ingest [port]` | Start the local capture ingest server. |
+| `--burp [port]` | Start the local Burp/PentesterFlow bridge. |
+| `--browser-ingest [port]` | Deprecated alias for `--burp`. |
 | `--no-stream` | Disable streaming chat for providers with SSE/tool-call issues. |
 | `--dangerously-skip-permissions` | Auto-approve non-sensitive tool calls. |
 | `--list-tools` / `--list-skills` | Print registered tools or discovered skills. |
@@ -237,7 +245,7 @@ directory passed with `--skills`. Later entries win on name collisions.
 
 ## Browser Capture
 
-`pentesterflow --browser-ingest` starts a local ingest server on
+`pentesterflow --burp` starts a local ingest server on
 `127.0.0.1:9999` for captured requests and snapshots. The companion
 `pentesterflow-browser-mcp` binary exposes the same capture data as an MCP
 server for compatible clients.

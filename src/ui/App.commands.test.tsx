@@ -54,7 +54,7 @@ let setYolo: ReturnType<typeof vi.fn>;
 let applyProvider: ReturnType<typeof vi.fn>;
 let mounted: ReturnType<typeof render> | null = null;
 
-function makeProps(): AppProps {
+function makeProps(overrides: Partial<AppProps> = {}): AppProps {
   return {
     agent,
     bannerData,
@@ -62,14 +62,15 @@ function makeProps(): AppProps {
     readConfig: () => ({ backend: 'ollama', baseURL: '', apiKey: '', model: 'stub-model' }),
     applyProvider,
     setYolo,
+    ...overrides,
   };
 }
 
 /** Mount <App> wrapped in the providers the CLI gives it. */
-function renderApp() {
+function renderApp(overrides: Partial<AppProps> = {}) {
   return render(
     <TerminalSizeProvider>
-      <App {...makeProps()} />
+      <App {...makeProps(overrides)} />
     </TerminalSizeProvider>,
   );
 }
@@ -169,6 +170,41 @@ describe('UI slash commands (terminal integration)', () => {
     await submit(mounted.stdin, '/provider');
     const frame = mounted.lastFrame() ?? '';
     expect(frame).toMatch(/backend|Ollama/i);
+    expect(frame).toContain('Kimi');
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it('/provider can collect and test a Kimi API key before model selection', async () => {
+    mounted = renderApp({
+      readConfig: () => ({ backend: 'ollama', baseURL: '', apiKey: '', model: 'stub-model' }),
+    });
+    await tick();
+    await submit(mounted.stdin, '/provider');
+
+    mounted.stdin.write('\x1B[B');
+    await tick();
+    mounted.stdin.write('\x1B[B');
+    await tick();
+    mounted.stdin.write('\r');
+    await tick();
+
+    expect(mounted.lastFrame()).toContain('Kimi API');
+    mounted.stdin.write('sk-kimi-test');
+    await tick();
+    mounted.stdin.write('\r');
+    await tick();
+
+    expect(listModels).toHaveBeenCalledWith('kimi', 'https://api.moonshot.ai/v1', 'sk-kimi-test');
+    expect(mounted.lastFrame()).toContain('Select model for Kimi');
+
+    mounted.stdin.write('\r');
+    await tick();
+    expect(applyProvider).toHaveBeenCalledWith({
+      backend: 'kimi',
+      model: 'qwen2.5-coder:14b',
+      baseURL: 'https://api.moonshot.ai/v1',
+      apiKey: 'sk-kimi-test',
+    });
     expect(runSpy).not.toHaveBeenCalled();
   });
 
@@ -200,6 +236,31 @@ describe('UI slash commands (terminal integration)', () => {
     expect(runSpy).not.toHaveBeenCalled();
   });
 
+  it('keeps up/down navigation inside multi-line input instead of history', async () => {
+    mounted = renderApp();
+    await tick();
+    await submit(mounted.stdin, '/help');
+    expect(runSpy).not.toHaveBeenCalled();
+
+    mounted.stdin.write('alpha');
+    await tick();
+    mounted.stdin.write('\x0e'); // Ctrl-N inserts a newline in the prompt editor.
+    await tick();
+    mounted.stdin.write('beta');
+    await tick();
+    mounted.stdin.write('\x1B[A');
+    await tick();
+    mounted.stdin.write('\x1B[A');
+    await tick();
+    mounted.stdin.write('X');
+    await tick();
+
+    const frame = mounted.lastFrame() ?? '';
+    expect(frame).toContain('Xalpha');
+    expect(frame).toContain('beta');
+    expect(frame).not.toContain('/helpX');
+  });
+
   it('/plan runs a plan-only turn with tools disabled', async () => {
     mounted = renderApp();
     await tick();
@@ -227,6 +288,76 @@ describe('UI slash commands (terminal integration)', () => {
     expect(runSpy).toHaveBeenCalledTimes(1);
     expect(runSpy.mock.calls[0][0]).toContain('current objective');
     expect(runSpy.mock.calls[0][3]).toEqual({ tools: false });
+  });
+
+  it('/next builds a coverage-driven plan-only turn', async () => {
+    const coverageSpy = vi
+      .spyOn(agent, 'coverageContext')
+      .mockResolvedValue('Coverage summary:\n{"total":1}\n\nCoverage entries:\nno entries match.');
+    mounted = renderApp();
+    await tick();
+    await submit(mounted.stdin, '/next authz sweep');
+    await tick();
+
+    expect(coverageSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0][0]).toContain('coverage-driven planning mode');
+    expect(runSpy.mock.calls[0][0]).toContain('Coverage summary');
+    expect(runSpy.mock.calls[0][0]).toContain('authz sweep');
+    expect(runSpy.mock.calls[0][3]).toEqual({ tools: false });
+    expect(mounted.lastFrame()).toContain('/next authz sweep');
+  });
+
+  it('/snapshot writes context without sending a chat turn', async () => {
+    const snapshotSpy = vi.spyOn(agent, 'saveContextSnapshot').mockResolvedValue('/tmp/context.md');
+    mounted = renderApp();
+    await tick();
+    await submit(mounted.stdin, '/snapshot');
+    await tick();
+
+    expect(snapshotSpy).toHaveBeenCalledWith('manual /snapshot');
+    expect(mounted.lastFrame()).toContain('context snapshot saved');
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it('/burp starts the local listener from the menu', async () => {
+    const startBurpBridge = vi.fn(async (port?: number) => ({
+      url: `http://127.0.0.1:${port ?? 9999}`,
+      alreadyRunning: false,
+    }));
+    mounted = renderApp({ startBurpBridge });
+    await tick();
+    await submit(mounted.stdin, '/burp 7777');
+    await tick();
+
+    expect(startBurpBridge).toHaveBeenCalledWith(7777);
+    expect(mounted.lastFrame()).toContain('Burp bridge listening at http://127.0.0.1:7777');
+    expect(runSpy).not.toHaveBeenCalled();
+  });
+
+  it('/burp reports an existing listener', async () => {
+    const startBurpBridge = vi.fn(async () => ({
+      url: 'http://127.0.0.1:9999',
+      alreadyRunning: true,
+    }));
+    mounted = renderApp({ startBurpBridge });
+    await tick();
+    await submit(mounted.stdin, '/burp');
+    await tick();
+
+    expect(startBurpBridge).toHaveBeenCalledWith(undefined);
+    expect(mounted.lastFrame()).toContain('Burp bridge already listening at http://127.0.0.1:9999');
+  });
+
+  it('/burp rejects invalid ports', async () => {
+    const startBurpBridge = vi.fn();
+    mounted = renderApp({ startBurpBridge });
+    await tick();
+    await submit(mounted.stdin, '/burp nope');
+    await tick();
+
+    expect(startBurpBridge).not.toHaveBeenCalled();
+    expect(mounted.lastFrame()).toContain('usage: /burp [port]');
   });
 
   it('/clear emits the clear-screen escape and is not sent to the agent', async () => {

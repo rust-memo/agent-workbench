@@ -24,7 +24,7 @@ describe('filterSlash', () => {
       filterSlash('/m')
         .map((s) => s.name)
         .sort(),
-    ).toEqual(['/maxsteps', '/model']);
+    ).toEqual(['/maxsteps', '/memory', '/model']);
     expect(filterSlash('/pl').map((s) => s.name)).toEqual(['/plan']);
   });
 

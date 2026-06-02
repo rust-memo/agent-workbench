@@ -10,6 +10,7 @@ import type { ChatRequest } from './types.js';
 
 let server: Server;
 let baseURL = '';
+let lastBody: Record<string, unknown> | null = null;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -31,6 +32,7 @@ beforeAll(async () => {
         model: string;
         stream?: boolean;
       };
+      lastBody = body as Record<string, unknown>;
 
       if (body.stream) {
         // SSE stream that fragments a tool call across two events, with
@@ -125,5 +127,11 @@ describe('OpenAIClient', () => {
   it('ping succeeds when the server is up', async () => {
     const c = new OpenAIClient(baseURL, '', 'qwen-coder');
     await expect(c.ping()).resolves.toBeUndefined();
+  });
+
+  it('disables Kimi thinking to avoid reasoning_content/tool-call history errors', async () => {
+    const c = new OpenAIClient(baseURL, 'sk-kimi', 'kimi-k2.6', 'kimi');
+    await c.chat({ model: 'kimi-k2.6', messages: [{ role: 'user', content: 'hi' }] });
+    expect(lastBody?.thinking).toEqual({ type: 'disabled' });
   });
 });

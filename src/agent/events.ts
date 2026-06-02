@@ -31,6 +31,9 @@ export interface ErrorEvent {
 export interface CompactEvent {
   type: 'compact';
   summary: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  memoryItems?: number;
 }
 export interface DecisionEvent {
   type: 'decision';

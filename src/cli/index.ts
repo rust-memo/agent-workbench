@@ -15,10 +15,11 @@ import { type IngestServerHandle, startIngestServer } from '../browser/server.js
 import { CaptureStore } from '../browser/store.js';
 import * as config from '../config/config.js';
 import { CoverageStore } from '../coverage/store.js';
-import { Store as FindingsStore } from '../findings/store.js';
+import { type Finding, Store as FindingsStore } from '../findings/store.js';
 import * as llmFactory from '../llm/factory.js';
 import { modelReliabilityWarning } from '../llm/modelWarnings.js';
 import { detectOllamaContextWindow, probeToolSupport } from '../llm/probe.js';
+import { KIMI_DEFAULT_BASE_URL } from '../llm/providers.js';
 import * as logger from '../logger/logger.js';
 import { createSessionDebugLog } from '../logger/sessionDebug.js';
 import { YoloPrompter } from '../permission/permission.js';
@@ -68,8 +69,8 @@ interface ParsedFlags {
   resumeID: string;
   yolo: boolean;
   browser: boolean;
-  browserIngest: boolean;
-  browserIngestPort: number;
+  burp: boolean;
+  burpPort: number;
   noStream: boolean;
   logPath: string;
   debugSession: boolean;
@@ -90,8 +91,8 @@ function parseFlags(argv: string[]): ParsedFlags {
     resumeID: '',
     yolo: false,
     browser: false,
-    browserIngest: false,
-    browserIngestPort: 9999,
+    burp: false,
+    burpPort: 9999,
     noStream: false,
     logPath: '',
     debugSession: process.env.PENTESTERFLOW_DEBUG_SESSION === '1',
@@ -141,15 +142,16 @@ function parseFlags(argv: string[]): ParsedFlags {
       case '--no-stream':
         out.noStream = true;
         break;
+      case '--burp':
       case '--browser-ingest': {
-        out.browserIngest = true;
-        // Optional inline port: --browser-ingest 9999. If the next arg
+        out.burp = true;
+        // Optional inline port: --burp 9999. If the next arg
         // starts with '--' or is missing, fall back to the default.
         const peek = argv[i + 1];
         if (peek && !peek.startsWith('--')) {
           const n = Number.parseInt(peek, 10);
           if (Number.isFinite(n) && n > 0 && n < 65536) {
-            out.browserIngestPort = n;
+            out.burpPort = n;
             i += 1;
           }
         }
@@ -209,6 +211,9 @@ async function main(): Promise<number> {
   if (flags.baseURL) cfg.base_url = flags.baseURL;
   if (flags.apiKey) cfg.api_key = flags.apiKey;
   if (flags.skillsDirs.length) cfg.skills_dirs = [...cfg.skills_dirs, ...flags.skillsDirs];
+  if (cfg.backend === 'kimi' && !cfg.api_key) {
+    cfg.api_key = process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY || '';
+  }
 
   // Browser MCP is opt-in PER SESSION via --browser, and never persisted:
   // a user must pass --browser each time they want it. We build a
@@ -276,6 +281,7 @@ async function main(): Promise<number> {
 
   // Findings store + notifier.
   const findingsStore = new FindingsStore('findings');
+  const captureStore = new CaptureStore({ maxEntries: 5000 });
 
   // Session id is computed up here (was previously right before Agent
   // construction) because per-session stores like CoverageStore need it
@@ -329,31 +335,62 @@ async function main(): Promise<number> {
   tools.register(new WebFetchTool());
   tools.register(new WebSearchTool());
   tools.register(new AskUserTool(bridgedAsk));
-  tools.register(new ConfirmFindingTool(findingsStore));
+  tools.register(
+    new ConfirmFindingTool(findingsStore, (finding, path) => {
+      captureStore.addBurpIssue({
+        id: `finding:${finding.slug}`,
+        title: finding.title,
+        severity: finding.severity,
+        confidence: 'Certain',
+        url: finding.url,
+        method: finding.method,
+        parameter: finding.parameter,
+        detail: [
+          finding.impact,
+          finding.responseExcerpt ? `\nEvidence:\n${finding.responseExcerpt}` : '',
+          finding.curl ? `\nReproduce:\n${finding.curl}` : '',
+        ].join('\n'),
+        remediation: finding.remediation,
+        path,
+        rawRequestB64: Buffer.from(findingRequestForBurp(finding), 'utf8').toString('base64'),
+      });
+    }),
+  );
   tools.register(new LoadSkillTool(skills));
   tools.register(new ReadPayloadsTool(skills));
   tools.register(new ReadSkillFileTool(skills));
   tools.register(new CoverageTool(coverageStore));
   for (const p of cfg.plugins) tools.register(new CommandPluginTool(p));
 
-  // Browser ingest server + capture-aware tools. The server only binds
-  // when --browser-ingest is set; the tools are always registered so
+  // Burp/browser ingest server + capture-aware tools. The server only binds
+  // when --burp is set; the tools are always registered so
   // the agent can call _status and learn the extension isn't running.
-  const captureStore = new CaptureStore({ maxEntries: 5000 });
   registerBrowserCaptureTools((t) => tools.register(t), captureStore);
   let ingestHandle: IngestServerHandle | null = null;
-  if (flags.browserIngest) {
+  const startBurpBridge = async (
+    port = flags.burpPort,
+  ): Promise<{ url: string; alreadyRunning: boolean }> => {
+    if (ingestHandle) return { url: ingestHandle.url, alreadyRunning: true };
+    ingestHandle = await startIngestServer({
+      store: captureStore,
+      port,
+      onEvent: (text) => noticeHolder.publish?.(text),
+    });
+    return { url: ingestHandle.url, alreadyRunning: false };
+  };
+  const closeBurpBridge = async (): Promise<void> => {
+    const handle = ingestHandle as IngestServerHandle | null;
+    if (handle) await handle.close();
+  };
+  if (flags.burp) {
     try {
-      ingestHandle = await startIngestServer({
-        store: captureStore,
-        port: flags.browserIngestPort,
-      });
+      const result = await startBurpBridge(flags.burpPort);
       process.stderr.write(
-        `browser ingest listening at ${ingestHandle.url}/ingest — set this as forwardUrl in the Chrome extension.\n`,
+        `PentesterFlow Burp bridge listening at ${result.url} — set this URL in the Burp plugin.\n`,
       );
     } catch (err) {
       process.stderr.write(
-        `warning: --browser-ingest failed to start on :${flags.browserIngestPort}: ${(err as Error).message}\n`,
+        `warning: --burp failed to start on :${flags.burpPort}: ${(err as Error).message}\n`,
       );
     }
   }
@@ -382,7 +419,7 @@ async function main(): Promise<number> {
       process.stdout.write(`- ${sk.name}\n    ${sk.description}\n    (${sk.path})\n`);
     }
     await Promise.all(mcpSessions.map((s) => s.close()));
-    await ingestHandle?.close();
+    await closeBurpBridge();
     return 0;
   }
   if (flags.listTools) {
@@ -392,7 +429,7 @@ async function main(): Promise<number> {
       process.stdout.write(`- ${n}${gated}\n    ${t?.description() ?? ''}\n`);
     }
     await Promise.all(mcpSessions.map((s) => s.close()));
-    await ingestHandle?.close();
+    await closeBurpBridge();
     return 0;
   }
 
@@ -618,6 +655,7 @@ async function main(): Promise<number> {
           });
           void runProbes(rootCtl.signal);
         },
+        startBurpBridge,
       }),
     ),
     {
@@ -642,7 +680,7 @@ async function main(): Promise<number> {
   }
   if (reloadTimer) clearTimeout(reloadTimer);
   await Promise.all(mcpSessions.map((s) => s.close()));
-  await ingestHandle?.close();
+  await closeBurpBridge();
   return 0;
 }
 
@@ -657,13 +695,15 @@ function providerLabel(b: string): string {
       return 'LM Studio';
     case 'openai-compat':
       return 'OpenAI-compatible';
+    case 'kimi':
+      return 'Kimi';
     default:
       return b;
   }
 }
 
 function localityFor(b: string): string {
-  return b === 'openai-compat' ? 'remote' : 'local';
+  return b === 'openai-compat' || b === 'kimi' ? 'remote' : 'local';
 }
 
 function defaultEndpoint(b: string): string {
@@ -673,6 +713,8 @@ function defaultEndpoint(b: string): string {
       return 'http://localhost:11434';
     case 'lmstudio':
       return 'http://localhost:1234/v1';
+    case 'kimi':
+      return KIMI_DEFAULT_BASE_URL;
     default:
       return '';
   }
@@ -683,6 +725,18 @@ function prettyCwd(): string {
   const home = homedir();
   if (home && cwd.startsWith(home)) return `~${cwd.slice(home.length)}`;
   return cwd;
+}
+
+function findingRequestForBurp(finding: Finding): string {
+  let url: URL;
+  try {
+    url = new URL(finding.url);
+  } catch {
+    return `${finding.method || 'GET'} / HTTP/1.1\r\nHost: localhost\r\n\r\n`;
+  }
+  const method = finding.method || 'GET';
+  const path = `${url.pathname || '/'}${url.search}`;
+  return `${method} ${path} HTTP/1.1\r\nHost: ${url.host}\r\nUser-Agent: PentesterFlow\r\n\r\n`;
 }
 
 /**
@@ -720,15 +774,15 @@ Usage:
   pentesterflow [flags]
 
 Flags:
-  --backend ollama|lmstudio|openai-compat
+  --backend ollama|lmstudio|openai-compat|kimi
   --model <id>
   --base-url <url>
   --api-key <key>
   --skills <dirs>            comma-separated extra skill directories
   --resume <session-id>
   --browser                  enable Browser MCP for this session only (not persisted)
-  --browser-ingest [port]    start local ingest server (default :9999) for
-                             the PentesterFlow Chrome extension
+  --burp [port]              start local Burp/PentesterFlow bridge (default :9999)
+  --browser-ingest [port]    deprecated alias for --burp
   --no-stream                disable streaming chat (fallback for backends
                              whose SSE/ND-JSON path drops tool_calls)
   --dangerously-skip-permissions   YOLO mode

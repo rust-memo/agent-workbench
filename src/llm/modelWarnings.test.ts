@@ -28,4 +28,8 @@ describe('modelReliabilityWarning', () => {
   it('warns differently for small openai-compatible hosted models', () => {
     expect(modelReliabilityWarning('openai-compat', 'llama-3.1-8b')).toContain('70b+');
   });
+
+  it('treats Kimi as a hosted provider for size warnings', () => {
+    expect(modelReliabilityWarning('kimi', 'llama-3.1-8b')).toContain('70b+');
+  });
 });

@@ -8,12 +8,24 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   confirm_finding: 'Confirmed Finding',
   load_skill: 'Skill',
   mcp_browser_browser_navigate: 'Browser',
+  mcp_browser_browser_click: 'Browser Click',
   web_fetch: 'Web Fetch',
   web_search: 'Web Search',
 };
 
 export function displayToolName(name: string): string {
+  if (name.startsWith('mcp_browser_browser_')) return browserToolName(name);
   return TOOL_DISPLAY_NAMES[name] ?? name;
+}
+
+function browserToolName(name: string): string {
+  if (TOOL_DISPLAY_NAMES[name]) return TOOL_DISPLAY_NAMES[name];
+  const action = name.replace(/^mcp_browser_browser_/, '').replace(/_/g, ' ');
+  return `Browser ${titleCase(action)}`;
+}
+
+function titleCase(s: string): string {
+  return s.replace(/\b[a-z]/g, (m) => m.toUpperCase());
 }
 
 // For tools with a single, obvious argument worth showing bare instead of

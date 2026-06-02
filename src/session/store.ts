@@ -10,7 +10,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { chmod, open, rename, unlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { Target } from '../target/target.js';
 
 // ---------- Shared message shape ----------
@@ -38,7 +38,23 @@ export interface SessionFile {
   updated_at: string;
   id?: string;
   target?: ReturnType<Target['toJSON']> | null;
+  memory?: SessionMemory | null;
   messages: Message[];
+}
+
+export interface SessionMemory {
+  version: 1;
+  updatedAt: string;
+  compactions: number;
+  lastCompactedAt?: string;
+  lastSummary?: string;
+  objectives: string[];
+  findings: string[];
+  tested: string[];
+  files: string[];
+  commands: string[];
+  credentials: string[];
+  todos: string[];
 }
 
 // ---------- IDs ----------
@@ -79,17 +95,26 @@ export class Store {
     return new Store(join(dir, `${id}.json`), id);
   }
 
-  load(): { messages: Message[]; target: Target | null } {
+  contextSnapshotPath(): string {
+    const id = this.id || basename(this.path).replace(/\.json$/, '') || 'session';
+    return join(dirname(dirname(this.path)), 'context', `${id}.md`);
+  }
+
+  load(): { messages: Message[]; target: Target | null; memory: SessionMemory | null } {
     if (!this.path || !existsSync(this.path)) {
-      return { messages: [], target: null };
+      return { messages: [], target: null, memory: null };
     }
     const buf = readFileSync(this.path, 'utf8');
     const raw = JSON.parse(buf) as Partial<SessionFile>;
     const target = raw.target ? Target.fromJSON(raw.target) : null;
-    return { messages: raw.messages ?? [], target };
+    return { messages: raw.messages ?? [], target, memory: raw.memory ?? null };
   }
 
-  async save(messages: Message[], target: Target | null): Promise<void> {
+  async save(
+    messages: Message[],
+    target: Target | null,
+    memory?: SessionMemory | null,
+  ): Promise<void> {
     if (!this.path) return;
     const dir = dirname(this.path);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -99,6 +124,7 @@ export class Store {
       updated_at: new Date().toISOString(),
       id: this.id || undefined,
       target: persistedTarget,
+      memory: memory ?? undefined,
       messages,
     };
     const body = `${JSON.stringify(file, null, 2)}\n`;
@@ -137,6 +163,40 @@ export class Store {
     } catch (err: unknown) {
       // ENOENT is fine — nothing to clear.
       if (!(err instanceof Error) || !err.message.includes('ENOENT')) throw err;
+    }
+  }
+
+  async saveContextSnapshot(markdown: string): Promise<string> {
+    if (!this.path) return '';
+    const outPath = this.contextSnapshotPath();
+    const dir = dirname(outPath);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const body = markdown.endsWith('\n') ? markdown : `${markdown}\n`;
+    const tmp = `${outPath}.tmp.${randomBytes(3).toString('hex')}`;
+    let fh: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      fh = await open(tmp, 'wx', 0o600);
+      await fh.writeFile(body);
+      await fh.sync();
+      await fh.close();
+      fh = undefined;
+      await rename(tmp, outPath);
+      await chmod(outPath, 0o600).catch(() => undefined);
+      return outPath;
+    } catch (err) {
+      if (fh) {
+        try {
+          await fh.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        await unlink(tmp);
+      } catch {
+        /* ignore */
+      }
+      throw err;
     }
   }
 }

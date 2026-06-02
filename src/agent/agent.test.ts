@@ -315,6 +315,43 @@ describe('Agent.run', () => {
     expect(last && last.type === 'compact' ? last.summary : '').toContain('auto-compacted');
   });
 
+  it('stores structured memory after manual compaction', async () => {
+    const summary = [
+      '## Current objective',
+      '- Test horizontal authorization on orders API',
+      '## Tested surface',
+      '- Replayed GET /api/orders/100 as USER_B and received 403',
+      '## Findings and evidence',
+      '- Confirmed IDOR on GET /api/invoices/200 with USER_A token',
+      '## Files and commands',
+      '- `curl https://app.example.com/api/invoices/200`',
+      '- findings/invoice-idor.md',
+      '## Credentials and placeholders',
+      '- USER_A_TOKEN and USER_B_TOKEN placeholders only',
+      '## Open TODOs',
+      '- Retest invoice download endpoint',
+    ].join('\n');
+    const { agent } = makeAgentWithClient([
+      {
+        message: { role: 'assistant', content: 'first turn' },
+        finishReason: 'stop',
+      },
+      {
+        message: { role: 'assistant', content: summary },
+        finishReason: 'stop',
+      },
+    ]);
+    const { sink } = collect();
+    await agent.run('start testing authz', new AbortController().signal, sink);
+    await agent.compact(new AbortController().signal, sink);
+
+    const memory = agent.formatMemory();
+    expect(memory).toContain('Test horizontal authorization');
+    expect(memory).toContain('Confirmed IDOR');
+    expect(memory).toContain('USER_A_TOKEN');
+    expect(agent.getMemoryStats().items).toBeGreaterThan(0);
+  });
+
   it('circuit-breaker stops retrying auto-compact after 3 failures', async () => {
     // Every chat call throws — auto-compact should fail, increment the
     // counter, and after 3 failures stop trying. We seed enough tokens

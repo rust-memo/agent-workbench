@@ -8,6 +8,10 @@ describe('displayToolName', () => {
   it('maps the browser navigate tool to "Browser"', () => {
     expect(displayToolName('mcp_browser_browser_navigate')).toBe('Browser');
   });
+  it('maps browser MCP actions to readable labels', () => {
+    expect(displayToolName('mcp_browser_browser_click')).toBe('Browser Click');
+    expect(displayToolName('mcp_browser_browser_type_text')).toBe('Browser Type Text');
+  });
   it('maps load_skill to "Skill"', () => {
     expect(displayToolName('load_skill')).toBe('Skill');
   });

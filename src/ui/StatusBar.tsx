@@ -12,6 +12,8 @@ export interface StatusProps {
   activeSkill: string | null;
   yolo: boolean;
   ctxTokens: number;
+  compactThreshold: number;
+  memoryItems: number;
   /** Live model + tool-support, surfaced here since the banner (printed
    *  once into scrollback) can't reflect post-launch changes. */
   model?: string;
@@ -56,6 +58,10 @@ export function StatusBar(props: StatusProps): React.ReactElement {
       : props.ctxTokens > 0
         ? `  ·  ctx: ~${props.ctxTokens}`
         : '';
+  const ctxPercent =
+    props.compactThreshold > 0 && props.ctxTokens > 0
+      ? Math.min(999, Math.round((props.ctxTokens / props.compactThreshold) * 100))
+      : 0;
   const pill = toolPill(props.toolSupport);
 
   return (
@@ -78,7 +84,13 @@ export function StatusBar(props: StatusProps): React.ReactElement {
         <Text color="cyan"> · filter: {props.transcriptFilter}</Text>
       ) : null}
       {props.activeSkill ? <Text color="gray"> · skill: {props.activeSkill}</Text> : null}
-      {ctxHint ? <Text color="gray">{ctxHint}</Text> : null}
+      {ctxHint ? (
+        <Text color={ctxPercent >= 90 ? 'yellow' : 'gray'}>
+          {ctxHint}
+          {ctxPercent ? `/${Math.round(props.compactThreshold / 1000)}k ${ctxPercent}%` : ''}
+        </Text>
+      ) : null}
+      {props.memoryItems > 0 ? <Text color="gray"> · mem: {props.memoryItems}</Text> : null}
       {props.yolo ? (
         <Text color="red" bold>
           {'  ·  YOLO'}

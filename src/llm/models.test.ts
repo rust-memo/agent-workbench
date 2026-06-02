@@ -36,7 +36,7 @@ beforeAll(async () => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({
-          data: [{ id: 'qwen-coder-32b-instruct' }, { id: 'gpt-4o-mini' }],
+          data: [{ id: 'qwen-coder-32b-instruct' }, { id: 'gpt-4o-mini' }, { id: 'kimi-k2.6' }],
         }),
       );
       return;
@@ -65,12 +65,17 @@ describe('listModels', () => {
 
   it('parses LM Studio (openai-compat) /v1/models', async () => {
     const models = await listModels('lmstudio', `http://127.0.0.1:${port}/v1`);
-    expect(models).toEqual(['qwen-coder-32b-instruct', 'gpt-4o-mini']);
+    expect(models).toEqual(['qwen-coder-32b-instruct', 'gpt-4o-mini', 'kimi-k2.6']);
   });
 
   it('parses openai-compat /v1/models with bearer auth', async () => {
     const models = await listModels('openai-compat', `http://127.0.0.1:${port}/v1`, 'sk-fake');
-    expect(models.length).toBe(2);
+    expect(models.length).toBe(3);
+  });
+
+  it('parses Kimi /v1/models with bearer auth', async () => {
+    const models = await listModels('kimi', `http://127.0.0.1:${port}/v1`, 'sk-kimi');
+    expect(models).toContain('kimi-k2.6');
   });
 
   it('throws on non-200', async () => {

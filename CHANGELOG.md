@@ -11,6 +11,21 @@ security engineers, professional penetration testers, and bug hunters.
 
 ### Added
 
+- **Kimi provider support** — first-class `kimi` backend, default Moonshot API
+  settings, model listing, secret API-key prompt in the provider picker, and
+  Kimi-compatible request shaping.
+- **Burp bridge runtime** — `pentesterflow --burp [port]`, `/burp [port]`, Burp
+  task ingestion, issue import endpoints, and Browser Capture tools for reading
+  queued Burp requests and confirmed issues from the CLI session.
+- **Context snapshots and session memory** — compacted engagement memory,
+  `/compact`, `/memory`, `/snapshot`, automatic five-minute context snapshots,
+  persisted memory in session files, and status-bar memory counters.
+- **Coverage-driven next steps** — `/next [objective]` uses coverage state to
+  propose concrete untested endpoint / parameter / vulnerability-class checks
+  without running tools.
+- **Improved terminal UX** — full-width dynamic banner layout, framed input
+  prompt lines, better multi-line history behavior, and clearer context usage
+  display.
 - **LLM backends** — Ollama and OpenAI-compatible clients (LM Studio, vLLM,
   llama.cpp server, remote providers) with NDJSON / SSE streaming, abort-aware
   fetch, a `ready` / `disconnected` health probe, and error classification.
@@ -44,3 +59,11 @@ security engineers, professional penetration testers, and bug hunters.
 - **Distribution** — tsup ESM bundle, single-file binaries, and GitHub Actions
   for CI (Node 20 + 22 on Ubuntu + macOS) and tagged releases (npm +
   cross-platform binaries).
+
+### Changed
+
+- **CLI bridge naming** — `--browser-ingest` is now a deprecated alias for
+  `--burp`, keeping old commands working while making Burp integration clearer.
+- **Kimi tool-call compatibility** — Kimi OpenAI-compatible requests disable
+  provider-side thinking to avoid tool-call failures caused by missing
+  `reasoning_content`.

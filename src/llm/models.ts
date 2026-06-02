@@ -1,8 +1,9 @@
 // Fetch the list of available models from an LLM backend. Used by the
 // interactive /provider flow to populate the model picker after the user
-// chooses Ollama / LM Studio / openai-compat.
+// chooses Ollama / LM Studio / openai-compat / Kimi.
 
 import type { Backend } from '../config/config.js';
+import { KIMI_DEFAULT_BASE_URL } from './providers.js';
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -10,6 +11,7 @@ const DEFAULT_BASE_URL: Record<Exclude<Backend, ''>, string> = {
   ollama: 'http://localhost:11434',
   lmstudio: 'http://localhost:1234/v1',
   'openai-compat': '',
+  kimi: KIMI_DEFAULT_BASE_URL,
 };
 
 /**
@@ -20,6 +22,7 @@ const DEFAULT_BASE_URL: Record<Exclude<Backend, ''>, string> = {
  *   ollama        → GET <base>/api/tags  → { models: [{ name }] }
  *   lmstudio      → GET <base>/models    → { data:   [{ id   }] }
  *   openai-compat → GET <base>/models    → same as lmstudio (Bearer header)
+ *   kimi          → GET <base>/models    → same as openai-compat (Bearer header)
  */
 export async function listModels(
   backend: Backend,

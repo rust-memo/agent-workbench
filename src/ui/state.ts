@@ -396,6 +396,17 @@ function isSuccessfulEmptyShellResult(result: string): boolean {
   return plain === 'exit: 0\nstdout:';
 }
 
+function formatCompactEvent(ev: Extract<AgentEvent, { type: 'compact' }>): string {
+  const meta: string[] = [];
+  if (typeof ev.tokensBefore === 'number' && typeof ev.tokensAfter === 'number') {
+    meta.push(`~${ev.tokensBefore} → ~${ev.tokensAfter} tokens`);
+  }
+  if (typeof ev.memoryItems === 'number') meta.push(`${ev.memoryItems} memory items`);
+  return meta.length > 0
+    ? `compacted: ${ev.summary}\n${meta.join(' · ')}`
+    : `compacted: ${ev.summary}`;
+}
+
 function applyAgentEvent(state: AppState, ev: AgentEvent): AppState {
   switch (ev.type) {
     case 'assistant-text': {
@@ -497,7 +508,7 @@ function applyAgentEvent(state: AppState, ev: AgentEvent): AppState {
       return {
         ...state,
         phase: 'planning',
-        transcript: [...state.transcript, { kind: 'system', text: `compacted: ${ev.summary}` }],
+        transcript: [...state.transcript, { kind: 'system', text: formatCompactEvent(ev) }],
       };
     case 'decision':
       return {

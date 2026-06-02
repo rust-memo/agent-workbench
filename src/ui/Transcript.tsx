@@ -26,6 +26,7 @@
 import { Box, Static, Text } from 'ink';
 import { memo, useMemo } from 'react';
 import { Banner, type BannerData } from './Banner.js';
+import { useTerminalSize } from './TerminalSize.js';
 import { renderMarkdown } from './markdown.js';
 import type { TranscriptEntry } from './state.js';
 
@@ -120,6 +121,7 @@ export function EntryView({ entry }: { entry: TranscriptEntry }): JSX.Element {
 }
 
 function TranscriptInner({ committed, bannerData, generation }: TranscriptProps): JSX.Element {
+  const { columns } = useTerminalSize();
   // Banner is item 0 (printed once, frozen), followed by committed entries.
   // The array only ever grows, so <Static> prints each new entry exactly
   // once into the terminal's scrollback and never redraws — which is what
@@ -134,7 +136,7 @@ function TranscriptInner({ committed, bannerData, generation }: TranscriptProps)
       {(item, index) =>
         item.t === 'banner' ? (
           <Box key={`banner-${generation}`} marginBottom={1}>
-            <Banner data={bannerData} />
+            <Banner data={bannerData} width={columns} />
           </Box>
         ) : (
           <EntryView key={`${generation}-${index}`} entry={item.entry} />

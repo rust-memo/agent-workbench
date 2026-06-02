@@ -34,13 +34,17 @@ describe('config', () => {
 
   it('round-trips through save and load', async () => {
     const cfg = defaultConfig();
-    cfg.backend = 'ollama';
-    cfg.model = 'qwen2.5:7b';
+    cfg.backend = 'kimi';
+    cfg.model = 'kimi-k2.6';
+    cfg.base_url = 'https://api.moonshot.ai/v1';
+    cfg.api_key = 'sk-test';
     cfg.mcp_servers = [{ name: 'browser', command: 'npx', args: ['-y', '@browsermcp/mcp@latest'] }];
     await save(cfg);
     const reloaded = load();
-    expect(reloaded.backend).toBe('ollama');
-    expect(reloaded.model).toBe('qwen2.5:7b');
+    expect(reloaded.backend).toBe('kimi');
+    expect(reloaded.model).toBe('kimi-k2.6');
+    expect(reloaded.base_url).toBe('https://api.moonshot.ai/v1');
+    expect(reloaded.api_key).toBe('sk-test');
     expect(reloaded.mcp_servers[0]?.command).toBe('npx');
   });
 

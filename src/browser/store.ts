@@ -50,6 +50,35 @@ export interface SessionSnapshot {
   sessionStorage?: Record<string, string>;
 }
 
+export interface BurpTask {
+  id: string;
+  action: 'scan' | 'plan' | 'scope';
+  target?: string;
+  method?: string;
+  url?: string;
+  host?: string;
+  rawRequestB64?: string;
+  notes?: string;
+  source: 'burp';
+  createdAt: number;
+}
+
+export interface BurpIssue {
+  id: string;
+  title: string;
+  severity: string;
+  confidence?: string;
+  url: string;
+  method?: string;
+  parameter?: string;
+  detail: string;
+  remediation?: string;
+  path?: string;
+  rawRequestB64?: string;
+  rawResponseB64?: string;
+  createdAt: number;
+}
+
 interface EndpointRecord {
   method: string;
   url: string;
@@ -68,6 +97,8 @@ export class CaptureStore {
   private readonly requests: Map<string, CapturedRequest> = new Map();
   private readonly endpoints: Map<string, EndpointRecord> = new Map();
   private readonly snapshots: SessionSnapshot[] = [];
+  private readonly burpTasks: BurpTask[] = [];
+  private readonly burpIssues: BurpIssue[] = [];
   private readonly maxEntries: number;
   private nextSeq = 1;
   private lastActivityAt = 0;
@@ -226,9 +257,89 @@ export class CaptureStore {
     this.requests.clear();
     this.endpoints.clear();
     this.snapshots.length = 0;
+    this.burpTasks.length = 0;
+    this.burpIssues.length = 0;
+  }
+
+  ingestBurpTask(raw: unknown): { ok: boolean; reason?: string; task?: BurpTask } {
+    if (!raw || typeof raw !== 'object') return { ok: false, reason: 'not an object' };
+    const obj = raw as Record<string, unknown>;
+    const action = obj.action;
+    if (action !== 'scan' && action !== 'plan' && action !== 'scope') {
+      return { ok: false, reason: 'action must be scan, plan, or scope' };
+    }
+    const task: BurpTask = {
+      id: `burp-task-${this.nextSeq++}`,
+      action,
+      target: typeof obj.target === 'string' ? obj.target : undefined,
+      method: typeof obj.method === 'string' ? obj.method : undefined,
+      url: typeof obj.url === 'string' ? obj.url : undefined,
+      host: typeof obj.host === 'string' ? obj.host : undefined,
+      rawRequestB64: typeof obj.rawRequestB64 === 'string' ? obj.rawRequestB64 : undefined,
+      notes: typeof obj.notes === 'string' ? obj.notes : undefined,
+      source: 'burp',
+      createdAt: Date.now(),
+    };
+    this.burpTasks.push(task);
+    if (this.burpTasks.length > 1000) this.burpTasks.splice(0, this.burpTasks.length - 1000);
+    this.lastActivityAt = Date.now();
+    return { ok: true, task };
+  }
+
+  listBurpTasks(): BurpTask[] {
+    return [...this.burpTasks].reverse();
+  }
+
+  ingestBurpIssue(raw: unknown): { ok: boolean; reason?: string; issue?: BurpIssue } {
+    if (!raw || typeof raw !== 'object') return { ok: false, reason: 'not an object' };
+    const obj = raw as Record<string, unknown>;
+    const title = typeof obj.title === 'string' ? obj.title : '';
+    const url = typeof obj.url === 'string' ? obj.url : '';
+    const detail = typeof obj.detail === 'string' ? obj.detail : '';
+    if (!title || !url || !detail) return { ok: false, reason: 'title, url, and detail required' };
+    const issue: BurpIssue = {
+      id: typeof obj.id === 'string' ? obj.id : `burp-issue-${this.nextSeq++}`,
+      title,
+      severity: typeof obj.severity === 'string' ? obj.severity : 'Information',
+      confidence: typeof obj.confidence === 'string' ? obj.confidence : 'Tentative',
+      url,
+      method: typeof obj.method === 'string' ? obj.method : undefined,
+      parameter: typeof obj.parameter === 'string' ? obj.parameter : undefined,
+      detail,
+      remediation: typeof obj.remediation === 'string' ? obj.remediation : undefined,
+      path: typeof obj.path === 'string' ? obj.path : undefined,
+      rawRequestB64: typeof obj.rawRequestB64 === 'string' ? obj.rawRequestB64 : undefined,
+      rawResponseB64: typeof obj.rawResponseB64 === 'string' ? obj.rawResponseB64 : undefined,
+      createdAt: typeof obj.createdAt === 'number' ? obj.createdAt : Date.now(),
+    };
+    this.upsertBurpIssue(issue);
+    this.lastActivityAt = Date.now();
+    return { ok: true, issue };
+  }
+
+  addBurpIssue(
+    issue: Omit<BurpIssue, 'id' | 'createdAt'> & { id?: string; createdAt?: number },
+  ): void {
+    this.upsertBurpIssue({
+      ...issue,
+      id: issue.id ?? `pf-finding-${this.nextSeq++}`,
+      createdAt: issue.createdAt ?? Date.now(),
+    });
+    this.lastActivityAt = Date.now();
+  }
+
+  listBurpIssues(): BurpIssue[] {
+    return [...this.burpIssues].reverse();
   }
 
   // ---- internals ----
+
+  private upsertBurpIssue(issue: BurpIssue): void {
+    const idx = this.burpIssues.findIndex((i) => i.id === issue.id);
+    if (idx >= 0) this.burpIssues[idx] = issue;
+    else this.burpIssues.push(issue);
+    if (this.burpIssues.length > 1000) this.burpIssues.splice(0, this.burpIssues.length - 1000);
+  }
 
   private recordEndpoint(
     method: string,

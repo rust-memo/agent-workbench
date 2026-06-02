@@ -12,6 +12,7 @@ import { type AgentEvent, MaxStepsError } from '../agent/events.js';
 import { findActiveMention, listMentionDir, parseMentionPath } from '../agent/mentions.js';
 import type { Backend } from '../config/config.js';
 import { listModels } from '../llm/models.js';
+import { KIMI_DEFAULT_BASE_URL } from '../llm/providers.js';
 import type { SessionDebugLog } from '../logger/sessionDebug.js';
 import { renderSkillTemplate } from '../skills/template.js';
 import { runSelfUpdate } from '../update/selfUpdate.js';
@@ -20,6 +21,7 @@ import type { BannerData } from './Banner.js';
 import { Input } from './Input.js';
 import { MentionMenu } from './MentionMenu.js';
 import { PermissionModal } from './PermissionModal.js';
+import { SecretInputModal, type SecretInputRequest } from './SecretInputModal.js';
 import { SkillsModal } from './SkillsModal.js';
 import { SlashMenu } from './SlashMenu.js';
 import { StatusBar } from './StatusBar.js';
@@ -57,6 +59,7 @@ const MENTION_LIMIT = 12;
 // Used by /clear and /reset so the conversation is truly gone, not just
 // scrolled off — then Ink reprints the banner via the Static remount.
 const CLEAR_SCREEN = '\x1b[2J\x1b[3J\x1b[H';
+const CONTEXT_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
 
 export interface AppProps {
   agent: Agent;
@@ -90,6 +93,8 @@ export interface AppProps {
   /** Optional bridge for out-of-loop system notices — live-reload uses
    *  it to surface "skill reloaded" without a modal. */
   bindNoticePublisher?: (publish: (text: string) => void) => void;
+  /** Start the local Burp/PentesterFlow bridge on demand from /burp. */
+  startBurpBridge?: (port?: number) => Promise<{ url: string; alreadyRunning: boolean }>;
 }
 
 export function App({
@@ -107,6 +112,7 @@ export function App({
   sessionDebug,
   onSkillCreated,
   bindNoticePublisher,
+  startBurpBridge,
 }: AppProps): JSX.Element {
   const [state, dispatch] = useReducer(reducer, '', () => {
     const s = initialState('', bannerData);
@@ -120,9 +126,11 @@ export function App({
   const inputValue = input.value;
   const [slashIdx, setSlashIdx] = useState(0);
   const [mentionIdx, setMentionIdx] = useState(0);
+  const [secretInput, setSecretInput] = useState<SecretInputRequest | null>(null);
   const { exit } = useApp();
   const { stdout } = useStdout();
   const runCtl = useRef<AbortController | null>(null);
+  const snapshotSaving = useRef(false);
 
   // Physically clear the terminal (screen + scrollback) for /clear and
   // /reset. Ink reprints the banner afterwards via the Static remount that
@@ -138,6 +146,22 @@ export function App({
     },
     [setYolo],
   );
+
+  const promptSecret = useCallback((inputReq: Omit<SecretInputRequest, 'resolve' | 'reject'>) => {
+    return new Promise<string>((resolve, reject) => {
+      setSecretInput({
+        ...inputReq,
+        resolve: (value) => {
+          setSecretInput(null);
+          resolve(value);
+        },
+        reject: (err) => {
+          setSecretInput(null);
+          reject(err);
+        },
+      });
+    });
+  }, []);
 
   // ---- session-scoped prompt history (↑/↓ in the input). Most-recent
   // ---- last; duplicates of the immediately-previous entry are dropped
@@ -248,6 +272,33 @@ export function App({
     [agent, isMaxStepsError, sessionDebug],
   );
 
+  const runAgentCompact = useCallback(() => {
+    sessionDebug?.write('compact_start');
+    dispatch({ type: 'set-busy', busy: true });
+    const ctl = new AbortController();
+    runCtl.current = ctl;
+    void agent
+      .compact(ctl.signal, (event) => {
+        sessionDebug?.agentEvent(event);
+        dispatch({ type: 'agent-event', event });
+      })
+      .catch((err: unknown) => {
+        sessionDebug?.write('compact_error', {
+          err:
+            err instanceof Error
+              ? { name: err.name, message: err.message, stack: err.stack }
+              : String(err),
+        });
+        dispatch({
+          type: 'append',
+          entry: {
+            kind: 'error',
+            text: `compact: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        });
+      });
+  }, [agent, sessionDebug]);
+
   // Bridge publishers wired exactly once so prompts surface as modals.
   useEffect(() => {
     bindPermPublisher?.((req) => dispatch({ type: 'set-perm', req }));
@@ -255,6 +306,29 @@ export function App({
     bindBannerPublisher?.((patch) => dispatch({ type: 'merge-banner-data', patch }));
     bindNoticePublisher?.((text) => dispatch({ type: 'append', entry: { kind: 'system', text } }));
   }, [bindPermPublisher, bindAskPublisher, bindBannerPublisher, bindNoticePublisher]);
+
+  useEffect(() => {
+    const saveSnapshot = () => {
+      if (snapshotSaving.current) return;
+      snapshotSaving.current = true;
+      void agent
+        .saveContextSnapshot('periodic 5 minute snapshot')
+        .then((path) => {
+          if (path) sessionDebug?.write('context_snapshot', { path });
+        })
+        .catch((err: unknown) => {
+          sessionDebug?.write('context_snapshot_error', {
+            err: err instanceof Error ? err.message : String(err),
+          });
+        })
+        .finally(() => {
+          snapshotSaving.current = false;
+        });
+    };
+    saveSnapshot();
+    const timer = setInterval(saveSnapshot, CONTEXT_SNAPSHOT_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [agent, sessionDebug]);
 
   // Live terminal width via the TerminalSizeProvider mounted in
   // cli/index.ts. Subscribes to stdout `resize` so the layout reflows
@@ -360,9 +434,12 @@ export function App({
           applyYolo,
           readConfig,
           applyProvider,
+          promptSecret,
           persistDisabledSkills,
           onSkillCreated,
           runAgentTurn,
+          runAgentCompact,
+          startBurpBridge,
         );
         if (handled) return;
       }
@@ -376,9 +453,12 @@ export function App({
       applyYolo,
       readConfig,
       applyProvider,
+      promptSecret,
       persistDisabledSkills,
       onSkillCreated,
       runAgentTurn,
+      runAgentCompact,
+      startBurpBridge,
     ],
   );
 
@@ -395,7 +475,7 @@ export function App({
     }
 
     // 1. Modal overlays consume keys before us.
-    if (state.pendingPerm || state.pendingAsk || state.pendingSkills) return;
+    if (secretInput || state.pendingPerm || state.pendingAsk || state.pendingSkills) return;
 
     // 2. History scrolling is the terminal's own job now — the transcript
     //    lives in native scrollback (Ink <Static>), so the mouse wheel and
@@ -541,16 +621,15 @@ export function App({
       input.moveRight();
       return;
     }
-    // ↑/↓ either move the cursor between lines of a multi-line input, or
-    // — when the cursor is on the first/last line — walk session prompt
-    // history (bash-style). The history navigation kicks in only when
-    // moving up/down within the input wouldn't change anything useful:
+    // ↑/↓ move between lines inside a multi-line draft. Prompt history is
+    // available only for single-line input, so editing a pasted/request
+    // draft never gets interrupted by an older command.
     //
-    //   - ↑ on the first line  → previous history entry (newer→older).
-    //   - ↓ on the last line   → next history entry; past the newest,
+    //   - Single-line ↑ on the first line → previous history entry (newer→older).
+    //   - Single-line ↓ on the last line  → next history entry; past the newest,
     //     restore the draft the user had before entering history mode.
     if (key.upArrow) {
-      if (cursorIsOnFirstLine(inputValue, input.cursor)) {
+      if (!inputValue.includes('\n') && cursorIsOnFirstLine(inputValue, input.cursor)) {
         const h = historyRef.current;
         if (h.length === 0) return;
         if (historyIdx === null) {
@@ -570,7 +649,7 @@ export function App({
       return;
     }
     if (key.downArrow) {
-      if (cursorIsOnLastLine(inputValue, input.cursor)) {
+      if (!inputValue.includes('\n') && cursorIsOnLastLine(inputValue, input.cursor)) {
         if (historyIdx === null) return; // not in history mode, nothing below
         const h = historyRef.current;
         const next = historyIdx + 1;
@@ -634,6 +713,7 @@ export function App({
     ? transcriptEntryMatchesFilter(liveEntry, state.transcriptFilter)
     : false;
   const target = agent.target.baseURL() || agent.target.name();
+  const memoryStats = agent.getMemoryStats();
 
   return (
     <Box flexDirection="column" width={cols}>
@@ -647,7 +727,9 @@ export function App({
           <EntryView entry={liveEntry} />
         </Box>
       ) : null}
-      {state.pendingAsk ? (
+      {secretInput ? (
+        <SecretInputModal req={secretInput} />
+      ) : state.pendingAsk ? (
         <AskModal req={state.pendingAsk} />
       ) : state.pendingPerm ? (
         <PermissionModal req={state.pendingPerm} />
@@ -675,6 +757,8 @@ export function App({
             activeSkill={state.activeSkill}
             yolo={state.yolo}
             ctxTokens={agent.approxTokens()}
+            compactThreshold={agent.getAutoCompactThreshold()}
+            memoryItems={memoryStats.items}
             model={state.bannerData.model}
             toolSupport={state.bannerData.toolSupport}
             phase={state.phase}
@@ -741,12 +825,17 @@ function handleSlash(
   applyYolo: (on: boolean) => void,
   readConfig: () => { backend: Backend; baseURL: string; apiKey: string; model: string },
   applyProvider: ApplyProvider,
+  promptSecret: (req: Omit<SecretInputRequest, 'resolve' | 'reject'>) => Promise<string>,
   persistDisabledSkills: PersistDisabledSkills | undefined,
   onSkillCreated: ((skillRootDir: string) => void) | undefined,
   runAgentTurn: (
     value: string,
     opts?: { transcriptUserText?: string; systemText?: string; runOptions?: AgentRunOptions },
   ) => void,
+  runAgentCompact: () => void,
+  startBurpBridge:
+    | ((port?: number) => Promise<{ url: string; alreadyRunning: boolean }>)
+    | undefined,
 ): boolean {
   const [cmd, ...rest] = raw.trim().split(/\s+/);
   switch (cmd) {
@@ -787,6 +876,95 @@ function handleSlash(
         entry: { kind: 'system', text: buildHelpText(agent, readConfig) },
       });
       return true;
+    case '/memory':
+      dispatch({
+        type: 'append',
+        entry: { kind: 'system', text: agent.formatMemory() },
+      });
+      return true;
+    case '/snapshot':
+      void agent
+        .saveContextSnapshot('manual /snapshot')
+        .then((path) =>
+          dispatch({
+            type: 'append',
+            entry: {
+              kind: 'system',
+              text: path ? `context snapshot saved: ${path}` : 'no session store configured',
+            },
+          }),
+        )
+        .catch((err: unknown) =>
+          dispatch({
+            type: 'append',
+            entry: { kind: 'error', text: `/snapshot: ${(err as Error).message}` },
+          }),
+        );
+      return true;
+    case '/burp': {
+      if (!startBurpBridge) {
+        dispatch({
+          type: 'append',
+          entry: { kind: 'error', text: '/burp is unavailable in this runtime.' },
+        });
+        return true;
+      }
+      const portRaw = rest[0] ?? '';
+      const port = portRaw ? Number.parseInt(portRaw, 10) : undefined;
+      if (portRaw && (!Number.isFinite(port) || !port || port < 1 || port > 65535)) {
+        dispatch({ type: 'append', entry: { kind: 'error', text: 'usage: /burp [port]' } });
+        return true;
+      }
+      void startBurpBridge(port)
+        .then((result) =>
+          dispatch({
+            type: 'append',
+            entry: {
+              kind: 'system',
+              text: result.alreadyRunning
+                ? `Burp bridge already listening at ${result.url}`
+                : `Burp bridge listening at ${result.url}`,
+            },
+          }),
+        )
+        .catch((err: unknown) =>
+          dispatch({
+            type: 'append',
+            entry: { kind: 'error', text: `/burp: ${(err as Error).message}` },
+          }),
+        );
+      return true;
+    }
+    case '/compact': {
+      if (agent.isRunning()) {
+        dispatch({
+          type: 'append',
+          entry: { kind: 'error', text: 'compact: a turn is already running' },
+        });
+        return true;
+      }
+      runAgentCompact();
+      return true;
+    }
+    case '/next': {
+      const objective = rest.join(' ').trim();
+      void agent
+        .coverageContext(new AbortController().signal)
+        .then((coverageContext) =>
+          runAgentTurn(buildCoverageNextPrompt(objective, coverageContext), {
+            transcriptUserText: objective ? `/next ${objective}` : '/next',
+            systemText: 'coverage-driven next steps — tools disabled',
+            runOptions: { tools: false },
+          }),
+        )
+        .catch((err: unknown) =>
+          dispatch({
+            type: 'append',
+            entry: { kind: 'error', text: `/next: ${(err as Error).message}` },
+          }),
+        );
+      return true;
+    }
     case '/plan': {
       const objective = rest.join(' ').trim();
       const prompt = buildPlanPrompt(objective);
@@ -798,7 +976,7 @@ function handleSlash(
       return true;
     }
     case '/provider':
-      openProviderPicker(dispatch, readConfig, applyProvider);
+      openProviderPicker(dispatch, readConfig, applyProvider, promptSecret);
       return true;
     case '/model': {
       const m = rest.join(' ').trim();
@@ -965,7 +1143,17 @@ function handleSlash(
 }
 
 function backendLabel(backend: Backend): string {
-  return backend === '' ? 'ollama' : backend;
+  switch (backend) {
+    case '':
+    case 'ollama':
+      return 'ollama';
+    case 'lmstudio':
+      return 'LM Studio';
+    case 'openai-compat':
+      return 'OpenAI-compatible';
+    case 'kimi':
+      return 'Kimi';
+  }
 }
 
 function buildPlanPrompt(objective: string): string {
@@ -989,6 +1177,27 @@ When you are ready to finalize, return the plan wrapped exactly in:
 </proposed_plan>
 
 Use Markdown inside the block. Prefer these sections: Summary, Key Changes, Test Plan, Assumptions.`;
+}
+
+function buildCoverageNextPrompt(objective: string, coverageContext: string): string {
+  const subject = objective
+    ? `Objective for next steps:\n\n${objective}`
+    : 'Objective for next steps: choose the highest-value tests to run next from the current engagement context.';
+  return `${subject}
+
+You are in coverage-driven planning mode for this turn.
+
+Coverage state:
+${coverageContext}
+
+Rules:
+- Do not call tools, run commands, fetch URLs, scan targets, or modify files.
+- Use the coverage state before suggesting any test.
+- Prioritize endpoint/parameter/vulnerability-class combinations that are not already covered.
+- Treat passed, failed, skipped, waf-blocked, and tried entries as already covered unless retesting is explicitly justified.
+- If there are no candidates in coverage, tell the user what candidate inventory is missing and how to collect it.
+- Output 5 to 10 concrete next tests with endpoint, parameter, vuln class, why it is next, and the exact coverage mark to record after testing.
+- Keep it concise and actionable.`;
 }
 
 /**
@@ -1166,7 +1375,7 @@ const KEYBINDINGS: Array<{ keys: string; desc: string }> = [
 ];
 
 const TIPS: string[] = [
-  'browser_capture_* tools surface live request / cookie / storage data once the Chrome extension is forwarding to a --browser-ingest server.',
+  'browser_capture_* tools surface live request / cookie / storage data once Burp/browser traffic is forwarding to a --burp bridge.',
   'coverage(action="untested", candidates=[...], vuln_classes=[...]) returns the (endpoint, param, class) tuples you have NOT tested yet — drive the next pass off of it.',
   'read_payloads(skill="<name>") pulls curated wordlists from disk. Skills like ssti / jwt ship pre-canned payload files in their payloads/ directory.',
   "Disabled skills are hidden from the agent's system prompt entirely. Use /skills to flip a skill back on without restarting.",
@@ -1188,6 +1397,7 @@ function buildHelpText(
   const target = agent.target.baseURL() || '(none — engagement unset)';
   const provider = cfg.backend || 'ollama';
   const model = cfg.model || agent.client.model() || '(unset)';
+  const memory = agent.getMemoryStats();
 
   const out: string[] = [];
 
@@ -1206,6 +1416,10 @@ function buildHelpText(
       `  ·  thinking ${c.white(agent.thinkingIsEnabled() ? 'on' : 'off')}`,
   );
   out.push(`  ${c.gray('skills')}     ${c.white(`${enabled}/${total}`)} enabled`);
+  out.push(
+    `  ${c.gray('memory')}     ${c.white(`${memory.items} items`)}` +
+      `  ·  compactions ${c.white(String(memory.compactions))}`,
+  );
   out.push('');
 
   // Slash commands ---------------------------------------------------
@@ -1258,11 +1472,13 @@ function openProviderPicker(
   dispatch: React.Dispatch<Action>,
   readConfig: () => { backend: Backend; baseURL: string; apiKey: string; model: string },
   applyProvider: ApplyProvider,
+  promptSecret: (req: Omit<SecretInputRequest, 'resolve' | 'reject'>) => Promise<string>,
 ): void {
   const cur = readConfig();
   const labelOllama = `Ollama${cur.backend === 'ollama' || cur.backend === '' ? ' (current)' : ''}`;
   const labelLM = `LM Studio${cur.backend === 'lmstudio' ? ' (current)' : ''}`;
   const labelOAI = `OpenAI-compatible${cur.backend === 'openai-compat' ? ' (current)' : ''}`;
+  const labelKimi = `Kimi${cur.backend === 'kimi' ? ' (current)' : ''}`;
 
   const req: AskRequest = {
     question: {
@@ -1271,6 +1487,10 @@ function openProviderPicker(
       options: [
         { label: labelOllama, description: 'local — /api/tags + /api/chat' },
         { label: labelLM, description: 'local — /v1/models + /v1/chat/completions' },
+        {
+          label: labelKimi,
+          description: 'remote — api.moonshot.ai OpenAI-compatible API',
+        },
         {
           label: labelOAI,
           description: 'remote — needs base URL + API key (uses current config values)',
@@ -1283,7 +1503,9 @@ function openProviderPicker(
         ? 'ollama'
         : picked.startsWith('LM Studio')
           ? 'lmstudio'
-          : 'openai-compat';
+          : picked.startsWith('Kimi')
+            ? 'kimi'
+            : 'openai-compat';
       const config = readConfig();
       // For openai-compat we need URL + key already in config.
       if (backend === 'openai-compat' && (!config.baseURL || !config.apiKey)) {
@@ -1298,8 +1520,44 @@ function openProviderPicker(
         });
         return;
       }
-      const baseURL = backend === 'openai-compat' ? config.baseURL : '';
-      const apiKey = backend === 'openai-compat' ? config.apiKey : '';
+      if (backend === 'kimi' && !config.apiKey) {
+        void promptSecret({
+          header: 'Kimi API',
+          question: 'Enter Kimi API key (MOONSHOT_API_KEY)',
+          placeholder: 'sk-...',
+        })
+          .then((apiKey) => {
+            if (!apiKey) {
+              dispatch({
+                type: 'append',
+                entry: { kind: 'error', text: 'Kimi API key cannot be empty.' },
+              });
+              return;
+            }
+            void fetchAndPickModel(
+              backend,
+              config.baseURL || KIMI_DEFAULT_BASE_URL,
+              apiKey,
+              dispatch,
+              applyProvider,
+              { successText: (picked) => `provider set to Kimi · model ${picked}` },
+            );
+          })
+          .catch(() => {
+            dispatch({
+              type: 'append',
+              entry: { kind: 'system', text: 'Kimi setup cancelled.' },
+            });
+          });
+        return;
+      }
+      const baseURL =
+        backend === 'openai-compat'
+          ? config.baseURL
+          : backend === 'kimi'
+            ? config.baseURL || KIMI_DEFAULT_BASE_URL
+            : '';
+      const apiKey = backend === 'openai-compat' || backend === 'kimi' ? config.apiKey : '';
       void fetchAndPickModel(backend, baseURL, apiKey, dispatch, applyProvider);
     },
     reject: () => dispatch({ type: 'set-ask', req: null }),

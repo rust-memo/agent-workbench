@@ -36,10 +36,11 @@ function modelPill(t?: ToolSupportPill): { text: string; color: string } | null 
   }
 }
 
-export function Banner({ data }: { data: BannerData }): React.ReactElement {
+export function Banner({ data, width }: { data: BannerData; width?: number }): React.ReactElement {
   const pill = modelPill(data.toolSupport);
   const ctx = data.contextWindow ? ` · ctx ${data.contextWindow}` : '';
   const modelValue = `${data.model}${ctx}`;
+  const boxWidth = Math.max(20, width ?? 80);
   const labels: Array<{
     label: string;
     value: string;
@@ -61,21 +62,41 @@ export function Banner({ data }: { data: BannerData }): React.ReactElement {
   const logoRows = [...Array(padTop).fill(''), ...LOGO, ...Array(padBot).fill('')];
 
   return (
-    <Box borderStyle="round" borderColor="magenta" flexDirection="column" paddingX={1}>
+    <Box
+      borderStyle="round"
+      borderColor="magenta"
+      flexDirection="column"
+      paddingX={1}
+      width={boxWidth}
+      flexShrink={0}
+    >
       {labels.map((row, i) => {
         const logoCell = logoRows[i] ?? '';
         return (
-          <Box key={`${row.label}-${i}`} justifyContent="space-between">
-            <Text color="magenta">{logoCell.padEnd(8)}</Text>
-            {row.accent ? (
-              <Text color="magenta" bold>
-                {row.label}
+          <Box key={`${row.label}-${i}`} width="100%" justifyContent="space-between">
+            <Box width={8} flexShrink={0}>
+              <Text color="magenta" wrap="truncate">
+                {logoCell}
               </Text>
+            </Box>
+            {row.accent ? (
+              <Box flexShrink={1} justifyContent="flex-end">
+                <Text color="magenta" bold wrap="truncate">
+                  {row.label}
+                </Text>
+              </Box>
             ) : (
-              <Box>
+              <Box flexShrink={1} justifyContent="flex-end">
                 <Text color="magenta">{row.label}: </Text>
-                <Text color={row.hint ? 'gray' : 'white'}>{row.value}</Text>
-                {row.pill ? <Text color={row.pill.color}> [{row.pill.text}]</Text> : null}
+                <Text color={row.hint ? 'gray' : 'white'} wrap="truncate">
+                  {row.value}
+                </Text>
+                {row.pill ? (
+                  <Text color={row.pill.color} wrap="truncate">
+                    {' '}
+                    [{row.pill.text}]
+                  </Text>
+                ) : null}
               </Box>
             )}
           </Box>

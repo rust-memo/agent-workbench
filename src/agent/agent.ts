@@ -10,7 +10,7 @@ import { parsedArgs } from '../llm/types.js';
 import { error as logError } from '../logger/logger.js';
 import type { Prompter } from '../permission/permission.js';
 import { redact } from '../redact/index.js';
-import type { Store } from '../session/store.js';
+import type { SessionMemory, Store } from '../session/store.js';
 import { type Registry as SkillRegistry, materializeSkillBody } from '../skills/registry.js';
 import type { Target } from '../target/target.js';
 import { canonicalToolName } from '../tools/aliases.js';
@@ -55,6 +55,8 @@ export interface AgentOptions {
  *  giving up for the rest of the session. A circuit-breaker: if compaction itself is broken, we don't
  *  want to retry it on every turn. */
 const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3;
+const COMPACTION_SYSTEM_PROMPT =
+  'Create a compact continuation memory for the same pentesting/coding session. Use concise Markdown with exactly these headings: Current objective, Target and scope, Decisions and assumptions, Tested surface, Findings and evidence, Files and commands, Credentials and placeholders, Open TODOs, Next best actions. Preserve exact endpoints, params, IDs, files, commands, tool results that matter, confirmed negatives, and reproduction evidence. Redact secrets but keep stable placeholders. Omit chatter and failed dead ends unless they prevent repeat work.';
 
 export class Agent {
   client: Client;
@@ -68,6 +70,7 @@ export class Agent {
   private maxSteps: number;
   private sysPrompt: string;
   private history: Message[];
+  private memory: SessionMemory | null = null;
   private autoCompactThreshold: number;
   private consecutiveCompactFailures = 0;
   private toolingProfile: ToolingProfile;
@@ -119,6 +122,73 @@ export class Agent {
 
   getAutoCompactThreshold(): number {
     return this.autoCompactThreshold;
+  }
+
+  getMemoryStats(): { compactions: number; items: number; lastCompactedAt?: string } {
+    return {
+      compactions: this.memory?.compactions ?? 0,
+      items: countMemoryItems(this.memory),
+      lastCompactedAt: this.memory?.lastCompactedAt,
+    };
+  }
+
+  formatMemory(): string {
+    if (!this.memory || countMemoryItems(this.memory) === 0) {
+      return 'session memory is empty — run /compact after useful work accumulates.';
+    }
+    const m = this.memory;
+    const out: string[] = [];
+    out.push(`Session memory · ${m.compactions} compaction${m.compactions === 1 ? '' : 's'}`);
+    if (m.lastCompactedAt) out.push(`Last compacted: ${m.lastCompactedAt}`);
+    appendMemorySection(out, 'Objectives', m.objectives);
+    appendMemorySection(out, 'Findings', m.findings);
+    appendMemorySection(out, 'Tested surface', m.tested);
+    appendMemorySection(out, 'Files', m.files);
+    appendMemorySection(out, 'Commands', m.commands);
+    appendMemorySection(out, 'Credentials / placeholders', m.credentials);
+    appendMemorySection(out, 'TODOs', m.todos);
+    return out.join('\n');
+  }
+
+  async saveContextSnapshot(reason = 'periodic'): Promise<string> {
+    if (!this.store) return '';
+    const out: string[] = [];
+    out.push('# PentesterFlow Session Context');
+    out.push('');
+    out.push(`Updated: ${new Date().toISOString()}`);
+    out.push(`Reason: ${reason}`);
+    out.push(`Provider: ${this.client.name()}`);
+    out.push(`Model: ${this.client.model()}`);
+    out.push(`Target: ${this.target.baseURL() || this.target.name() || '(none)'}`);
+    out.push(`Approx tokens: ${this.approxTokens()}`);
+    out.push('');
+    out.push('## Persistent Memory');
+    out.push('');
+    out.push(this.formatMemory());
+    out.push('');
+    out.push('## Redacted Conversation Context');
+    out.push('');
+    out.push(formatHistoryForCompaction(this.history.slice(1)));
+    return this.store.saveContextSnapshot(out.join('\n'));
+  }
+
+  async coverageContext(signal: AbortSignal): Promise<string> {
+    if (!this.tools.get('coverage')) return 'Coverage tool is not available in this session.';
+    const summary = await this.tools
+      .execute('coverage', { action: 'summary' }, signal, this.prompter)
+      .catch((err: unknown) => `error: ${errMessage(err)}`);
+    const entries = await this.tools
+      .execute('coverage', { action: 'list' }, signal, this.prompter)
+      .catch((err: unknown) => `error: ${errMessage(err)}`);
+    return [
+      'Coverage summary:',
+      summary,
+      '',
+      'Coverage entries:',
+      entries,
+      '',
+      'Use this coverage state to choose next tests. Prefer untested endpoint/parameter/vulnerability-class combinations. Do not repeat entries already marked passed, failed, skipped, waf-blocked, or tried unless the objective explicitly asks for retesting.',
+    ].join('\n');
   }
 
   /** Set the auto-compact threshold (in approxTokens). 0 disables. */
@@ -291,6 +361,7 @@ export class Agent {
 
   async reset(): Promise<void> {
     this.history = [{ role: 'system', content: this.sysPrompt }];
+    this.memory = null;
     // A reset wipes the conversation; allowed-tools restrictions from
     // previously-loaded skills should go too, otherwise the user is
     // stuck with a stale allowlist on a fresh session.
@@ -312,6 +383,7 @@ export class Agent {
     if (!this.store) return;
     const loaded = this.store.load();
     if (loaded.target) this.target.copyFrom(loaded.target);
+    this.memory = loaded.memory;
     this.rebuildSystemPrompt();
     if (loaded.messages.length === 0) {
       this.history = [{ role: 'system', content: this.sysPrompt }];
@@ -373,8 +445,7 @@ export class Agent {
         messages: [
           {
             role: 'system',
-            content:
-              'Summarize this conversation into compact context for continuing the same pentesting/coding session. Preserve decisions, files touched, commands run, findings, credentials/placeholders, TODOs, and current objective. Omit chatter.',
+            content: COMPACTION_SYSTEM_PROMPT,
           },
           {
             role: 'user',
@@ -388,6 +459,7 @@ export class Agent {
         safeEmit({ type: 'error', err: new Error('compact returned empty summary') });
         return;
       }
+      this.memory = mergeMemory(this.memory, summary);
       this.history = [
         { role: 'system', content: this.sysPrompt },
         {
@@ -398,7 +470,10 @@ export class Agent {
       await this.save().catch((err) =>
         safeEmit({ type: 'error', err: new Error(`save compacted session: ${errMessage(err)}`) }),
       );
-      safeEmit({ type: 'compact', summary });
+      await this.saveContextSnapshot('manual compact').catch((err) =>
+        safeEmit({ type: 'error', err: new Error(`save context snapshot: ${errMessage(err)}`) }),
+      );
+      safeEmit({ type: 'compact', summary, memoryItems: countMemoryItems(this.memory) });
     } catch (err) {
       logError('agent: panic in Compact', { err: errMessage(err) });
       safeEmit({ type: 'error', err: err instanceof Error ? err : new Error(String(err)) });
@@ -610,6 +685,7 @@ export class Agent {
     emit({
       type: 'compact',
       summary: `auto-compact triggered (~${tokensBefore} tokens ≥ threshold ${this.autoCompactThreshold})…`,
+      tokensBefore,
     });
 
     let compactionSucceeded = false;
@@ -636,6 +712,9 @@ export class Agent {
       emit({
         type: 'compact',
         summary: `auto-compacted: ~${tokensBefore} → ~${tokensAfter} tokens`,
+        tokensBefore,
+        tokensAfter,
+        memoryItems: countMemoryItems(this.memory),
       });
     }
   }
@@ -655,8 +734,7 @@ export class Agent {
       messages: [
         {
           role: 'system',
-          content:
-            'Summarize this conversation into compact context for continuing the same pentesting/coding session. Preserve decisions, files touched, commands run, findings, credentials/placeholders, TODOs, and current objective. Omit chatter.',
+          content: COMPACTION_SYSTEM_PROMPT,
         },
         {
           role: 'user',
@@ -669,6 +747,7 @@ export class Agent {
     if (!summary) {
       throw new Error('compact returned empty summary');
     }
+    this.memory = mergeMemory(this.memory, summary);
     this.history = [
       { role: 'system', content: this.sysPrompt },
       {
@@ -677,6 +756,7 @@ export class Agent {
       },
     ];
     await this.save();
+    await this.saveContextSnapshot('auto compact');
   }
 
   private rebuildSystemPrompt(): void {
@@ -690,7 +770,7 @@ export class Agent {
 
   private async save(): Promise<void> {
     if (!this.store) return;
-    await this.store.save(this.history, this.target);
+    await this.store.save(this.history, this.target, this.memory);
   }
 }
 
@@ -702,6 +782,129 @@ function ensureSystemPrompt(messages: Message[], prompt: string): Message[] {
   }
   if (messages[0].content === prompt) return messages;
   return [{ role: 'system', content: prompt }, ...messages.slice(1)];
+}
+
+function emptyMemory(): SessionMemory {
+  const now = new Date().toISOString();
+  return {
+    version: 1,
+    updatedAt: now,
+    compactions: 0,
+    objectives: [],
+    findings: [],
+    tested: [],
+    files: [],
+    commands: [],
+    credentials: [],
+    todos: [],
+  };
+}
+
+function mergeMemory(prev: SessionMemory | null, summary: string): SessionMemory {
+  const now = new Date().toISOString();
+  const parsed = parseCompactionSummary(summary);
+  return {
+    ...(prev ?? emptyMemory()),
+    updatedAt: now,
+    lastCompactedAt: now,
+    lastSummary: summary,
+    compactions: (prev?.compactions ?? 0) + 1,
+    objectives: mergeList(prev?.objectives, parsed.objectives),
+    findings: mergeList(prev?.findings, parsed.findings),
+    tested: mergeList(prev?.tested, parsed.tested),
+    files: mergeList(prev?.files, parsed.files),
+    commands: mergeList(prev?.commands, parsed.commands),
+    credentials: mergeList(prev?.credentials, parsed.credentials),
+    todos: mergeList(prev?.todos, parsed.todos),
+  };
+}
+
+function parseCompactionSummary(
+  summary: string,
+): Omit<
+  SessionMemory,
+  'version' | 'updatedAt' | 'compactions' | 'lastCompactedAt' | 'lastSummary'
+> {
+  const sections = splitMarkdownSections(summary);
+  return {
+    objectives: sectionItems(sections, ['current objective', 'target and scope']),
+    findings: sectionItems(sections, ['findings and evidence']),
+    tested: sectionItems(sections, ['tested surface', 'decisions and assumptions']),
+    files: sectionItems(sections, ['files and commands']).filter((s) =>
+      /(?:^|[\s/])[\w.-]+\.\w+|\/|\\/.test(s),
+    ),
+    commands: sectionItems(sections, ['files and commands']).filter((s) =>
+      /`[^`]+`|\b(?:curl|npm|git|rg|python|node|ffuf|nuclei|sqlmap|httpx)\b/.test(s),
+    ),
+    credentials: sectionItems(sections, ['credentials and placeholders']),
+    todos: sectionItems(sections, ['open todos', 'next best actions']),
+  };
+}
+
+function splitMarkdownSections(text: string): Map<string, string[]> {
+  const sections = new Map<string, string[]>();
+  let current = 'summary';
+  for (const raw of text.replace(/\r\n/g, '\n').split('\n')) {
+    const heading = raw.match(/^#{1,3}\s+(.+?)\s*$/);
+    if (heading?.[1]) {
+      current = normalizeHeading(heading[1]);
+      if (!sections.has(current)) sections.set(current, []);
+      continue;
+    }
+    if (!sections.has(current)) sections.set(current, []);
+    sections.get(current)?.push(raw);
+  }
+  return sections;
+}
+
+function sectionItems(sections: Map<string, string[]>, names: string[]): string[] {
+  const out: string[] = [];
+  for (const name of names.map(normalizeHeading)) {
+    for (const line of sections.get(name) ?? []) {
+      const item = line.replace(/^\s*(?:[-*]|\d+[.)])\s+/, '').trim();
+      if (!item || /^none\b|^n\/a$/i.test(item)) continue;
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+function normalizeHeading(s: string): string {
+  return s.toLowerCase().replace(/[:#]/g, '').trim();
+}
+
+function mergeList(prev: string[] | undefined, next: string[], cap = 24): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of [...(prev ?? []), ...next]) {
+    const clean = item.replace(/\s+/g, ' ').trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean.length > 240 ? `${clean.slice(0, 239)}…` : clean);
+  }
+  return out.slice(-cap);
+}
+
+function countMemoryItems(memory: SessionMemory | null): number {
+  if (!memory) return 0;
+  return (
+    memory.objectives.length +
+    memory.findings.length +
+    memory.tested.length +
+    memory.files.length +
+    memory.commands.length +
+    memory.credentials.length +
+    memory.todos.length
+  );
+}
+
+function appendMemorySection(out: string[], title: string, items: string[]): void {
+  if (items.length === 0) return;
+  out.push('');
+  out.push(title);
+  for (const item of items.slice(-8)) out.push(`- ${item}`);
 }
 
 function formatHistoryForCompaction(messages: Message[]): string {

@@ -9,7 +9,7 @@ import { z } from 'zod';
 
 // ---------- Schema ----------
 
-const Backend = z.enum(['', 'ollama', 'lmstudio', 'openai-compat']);
+const Backend = z.enum(['', 'ollama', 'lmstudio', 'openai-compat', 'kimi']);
 export type Backend = z.infer<typeof Backend>;
 
 const MCPServerConfig = z.object({
