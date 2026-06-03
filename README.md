@@ -2,10 +2,11 @@
 
 <img src="assets/logo.png" alt="PentesterFlow" width="520" />
 
-### Agentic offensive-security in your terminal, powered by models you control.
+### Human-in-the-loop Agentic AI CLI for penetration testers and bug hunters.
 
-PentesterFlow turns a scoped security objective into a tool-using workflow for
-recon, vulnerability testing, verification, and report-ready findings.
+PentesterFlow helps security engineers move through recon, enumeration,
+validation, evidence collection, and reporting while keeping the analyst in
+control.
 
 <br/>
 
@@ -15,7 +16,7 @@ recon, vulnerability testing, verification, and report-ready findings.
 [![license: Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![stars](https://img.shields.io/github/stars/PentesterFlow/agent?style=social)](https://github.com/PentesterFlow/agent/stargazers)
 
-**[Install](#install) · [Quickstart](#quickstart) · [Core](#core) · [Usage](#usage) · [Skills](#skills) · [Security](#security-model)**
+**[Install](#install) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Burp](#burp-integration) · [Security](#security-model)**
 
 </div>
 
@@ -25,7 +26,7 @@ recon, vulnerability testing, verification, and report-ready findings.
 $ pentesterflow
 ╭────────────────────────────────────────────────╮
 │  PentesterFlow                                 │
-│  local agent · tools ready · human approved     │
+│  local agent · tools ready · analyst approved  │
 ╰────────────────────────────────────────────────╯
 
 › /target https://app.example.com
@@ -36,7 +37,7 @@ $ pentesterflow
   ⎿ loaded skill: webvuln
 ⏺ http GET https://app.example.com/api/v1/orders/1043
   ⎿ 200 OK
-⏺ Shell(curl -s -H "Authorization: Bearer $USER_B" https://app.example.com/api/v1/orders/1043)
+⏺ BashTool(curl -s -H "Authorization: Bearer $USER_B" ...)
   ⎿ cross-account response confirmed
 ⏺ Confirmed Finding (high) IDOR on /api/v1/orders/{id}
   ⎿ written to ./findings/idor-orders.md
@@ -44,46 +45,52 @@ $ pentesterflow
 
 ## Overview
 
-PentesterFlow is an open-source terminal agent for professional penetration
-testing, bug bounty work, and security engineering. It connects to local or
-OpenAI-compatible LLM backends, plans against a scoped target, asks for approval
-before sensitive actions, runs tools, verifies behavior, and writes findings you
-can use in a report.
+PentesterFlow is an open-source terminal assistant designed specifically for
+authorized offensive-security work. It connects to local or hosted LLMs, plans
+against a scoped target, uses real pentesting tools, asks for approval before
+sensitive actions, remembers useful lessons across sessions, and writes
+evidence-backed findings.
 
-The project is intentionally **local-first** and **curl-first**. It works well
-with Ollama, LM Studio, vLLM, llama.cpp servers, and compatible hosted APIs. It
-prefers transparent HTTP and shell commands before heavier scanners, so every
-step is visible, reproducible, and easy to audit.
+It is built around three ideas:
+
+- **Analyst control**: the human approves sensitive actions and decides scope.
+- **Transparent execution**: curl-first, reproducible commands, visible tool
+  calls, saved evidence, and audit-friendly logs.
+- **Operational learning**: local project and personal knowledge bases improve
+  future sessions without retraining the model or adding user-facing complexity.
 
 > [!WARNING]
 > Use PentesterFlow only on systems where you have explicit authorization. The
-> agent can run shell commands, make HTTP requests, edit files, and drive browser
-> capture tools after approval.
+> agent can run shell commands, make HTTP requests, edit files, and process
+> captured traffic after approval.
 
-## Core
+## Why PentesterFlow
 
-| Area | What PentesterFlow provides |
+Current agentic AI systems often struggle with security-specific workflows,
+hallucinated findings, weak context retention, poor tool integration, and limited
+auditability. PentesterFlow addresses those gaps with:
+
+| Challenge | PentesterFlow approach |
 |---|---|
-| Agent loop | Plan, act, observe, verify, and report across one scoped task. |
-| Model backends | Ollama, LM Studio, Kimi API, Groq, Gemini API, and OpenAI-compatible APIs. |
-| Tooling | Shell/Bash, HTTP, file tools, search, browser capture, MCP, and finding confirmation. |
-| Skills | Markdown playbooks for recon, web vulnerabilities, SSRF, SSTI, JWT, GraphQL, race testing, takeover checks, Supabase, and deserialization. |
-| Human control | Permission prompts with allow once, allow session, deny, and explicit YOLO mode for labs. |
-| Reporting | Confirmed findings saved as Markdown with evidence, impact, PoC, and remediation. |
-| Releases | Standalone binaries for macOS, Linux, and Windows published through GitHub Actions. |
+| Generic AI workflows | Built-in pentest skills for recon, web vulns, SSRF, SSTI, JWT, GraphQL, race, takeover, Supabase, and deserialization. |
+| Hallucinated findings | `confirm_finding` should be used only after reproduction with request/response evidence. |
+| Long engagements | Saved sessions, compaction, context snapshots, resume recap, and continuous local learning. |
+| Real-world tooling | Shell/Bash, HTTP, Burp bridge, browser capture, MCP, file tools, grep/glob, and custom plugins. |
+| Human oversight | Permission prompts, allow-once/session decisions, and explicit YOLO mode for labs. |
+| Reproducibility | Copy-pasteable commands, Markdown findings, JSON-lines logs, and stable session files. |
+| Large attack surfaces | Coverage tracking, `/next`, skills, captured traffic queries, and learned coverage gaps. |
 
-## Highlights
+## Core Capabilities
 
-- **Local by default**: run against your own model backend with no required cloud account.
-- **Hosted when needed**: switch directly to Kimi API or any OpenAI-compatible endpoint.
-- **Fast hosted models**: use Groq's OpenAI-compatible Chat API directly from `/provider`.
-- **Gemini support**: use Gemini's native API with tested PentesterFlow-fit models and cheap-cost tags in `/provider`.
-- **Modern terminal UI**: compact tool calls, readable shell transcripts, skill summaries, and finding-focused output.
-- **Permission-aware execution**: approve each risky action once or for the session.
-- **Decision planner**: each normal turn gets lightweight skill selection, risk labeling, and coverage guidance before tool use.
-- **Verified findings only**: the agent should reproduce a bug before using `confirm_finding`.
-- **Portable shell guidance**: tool prompts and preflight checks steer commands away from GNU-only flags when they can break on macOS or Linux.
-- **Extensible workflows**: add custom skills, MCP servers, and browser-capture producers.
+| Area | What it provides |
+|---|---|
+| Agent loop | Plan, act, observe, verify, report, and learn across scoped tasks. |
+| Model backends | Ollama, LM Studio, Kimi, Groq, Gemini, and OpenAI-compatible APIs. |
+| Tools | Shell/Bash, HTTP, file tools, search, browser capture, Burp ingest, MCP, and finding confirmation. |
+| Skills | Markdown playbooks with methodology, payloads, constraints, and allowed tools. |
+| Memory | Session memory, context snapshots, resume recap, and continuous local intelligence. |
+| Reporting | Confirmed findings saved to `./findings/<slug>.md` with evidence, impact, PoC, and remediation. |
+| UX | Full-width terminal UI, slash commands, compact transcripts, permission modals, and interactive provider/model setup. |
 
 ## Install
 
@@ -103,11 +110,11 @@ irm https://raw.githubusercontent.com/PentesterFlow/agent/main/install.ps1 | iex
 Pin a release or choose an install directory:
 
 ```sh
-PENTESTERFLOW_VERSION=v0.1.0 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
+PENTESTERFLOW_VERSION=v0.1.6 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/PentesterFlow/agent/main/install.sh)"
 ```
 
-You can also download binaries directly from
+Download binaries directly from
 [GitHub Releases](https://github.com/PentesterFlow/agent/releases):
 
 | OS | Assets |
@@ -119,125 +126,253 @@ You can also download binaries directly from
 ## Quickstart
 
 ```sh
-# 1. Pull a capable local model
+# Local model example
 ollama pull qwen2.5-coder:32b
-
-# 2. Launch PentesterFlow
 pentesterflow
-
-# 3. Set scope, then describe the task
-#    /target https://app.example.com
-#    test the orders API for IDOR and broken access control
 ```
 
-## Usage
+Inside the CLI:
+
+```text
+/provider
+/target https://app.example.com
+map the authenticated API surface and test for IDOR
+```
+
+Resume a previous assessment:
 
 ```sh
-# Default: local Ollama
-pentesterflow
+pentesterflow --resume <session-id>
+```
+
+On resume, PentesterFlow automatically shows a recap of the previous session's
+persistent memory so you can continue without manually reconstructing context.
+
+## Providers
+
+Interactive setup:
+
+```text
+/provider
+/model list
+/model <id>
+```
+
+CLI examples:
+
+```sh
+# Ollama
+pentesterflow --backend ollama --model qwen2.5-coder:32b
 
 # LM Studio
-pentesterflow --backend lmstudio --model qwen2.5-coder-32b-instruct
+pentesterflow --backend lmstudio --model zai-org/glm-4.7-flash
 
 # OpenAI-compatible endpoint
 pentesterflow --backend openai-compat \
   --base-url https://api.example.com/v1 \
   --api-key sk-...
 
-# Kimi API
+# Kimi
 MOONSHOT_API_KEY=sk-... pentesterflow --backend kimi --model kimi-k2.6
 
-# Groq API
+# Groq
 GROQ_API_KEY=gsk_... pentesterflow --backend groq --model openai/gpt-oss-20b
 
-# Gemini API
+# Gemini
 GEMINI_API_KEY=AIza... pentesterflow --backend gemini --model models/gemini-3.5-flash
-
-# Enable browser-capture tools for this session
-pentesterflow --browser
-
-# Start the local Burp/PentesterFlow bridge
-pentesterflow --burp
-
-# From a source checkout
-npm run dev -- --burp 9999
-
-# Auto-approve tool calls for disposable lab environments only
-pentesterflow --dangerously-skip-permissions
 ```
 
-Groq on-demand accounts can have lower tokens-per-minute limits than the model
-context window. PentesterFlow uses a compact system prompt plus a lower
-auto-compaction threshold for Groq sessions so requests stay below Groq's TPM
-limit more reliably during long assessments.
+Notes:
 
-### Command-Line Flags
+- Groq sessions use a compact prompt and lower compaction threshold to avoid
+  on-demand TPM errors during long assessments.
+- LM Studio responses are protected with stop tokens and template-marker
+  trimming to avoid repeated `<|user|>` / `<|observation|>` leakage.
+- Gemini picker highlights recommended and cheap-cost models.
 
-| Flag | Description |
+## Pentest Lifecycle
+
+PentesterFlow is designed to assist across the full engagement:
+
+1. **Scope**: set target URL, constraints, credentials, and authorization notes.
+2. **Recon**: discover hosts, endpoints, technologies, files, APIs, and exposed
+   metadata.
+3. **Enumeration**: map parameters, roles, auth states, captured browser/Burp
+   traffic, and attack surfaces.
+4. **Validation**: reproduce candidate issues with deterministic requests and
+   compare evidence.
+5. **Coverage**: track tested endpoint/parameter/vulnerability-class tuples and
+   ask `/next` for untested work.
+6. **Reporting**: persist confirmed findings with PoC, evidence, impact, and
+   remediation.
+7. **Learning**: save reusable lessons silently so future sessions improve.
+
+## Continuous Learning
+
+PentesterFlow includes a local Continuous Learning System. It improves future
+sessions without retraining model weights and without requiring users to manage
+memory manually.
+
+What it stores:
+
+- User preferences and working style.
+- Important decisions and project context.
+- Successful workflows and proven commands.
+- Mistakes, failed assumptions, and lessons learned.
+- Coverage gaps, missed checks, and follow-up scenarios.
+- Finding patterns and evidence requirements.
+- Tool/config patterns that worked well.
+
+Where it stores memory:
+
+| Path | Purpose |
 |---|---|
-| `--backend ollama\|lmstudio\|kimi\|groq\|gemini\|openai-compat` | Select the LLM backend. |
-| `--model <id>` | Set the model id. |
-| `--base-url <url>` / `--api-key <key>` | Configure Kimi, Groq, Gemini, or another OpenAI-compatible backend. |
-| `--skills <dirs>` | Load extra skill directories. |
-| `--resume <session-id>` | Resume a saved session. |
-| `--browser` | Enable Browser MCP tools for the current session. |
-| `--burp [port]` | Start the local Burp/PentesterFlow bridge. |
-| `--browser-ingest [port]` | Deprecated alias for `--burp`. |
-| `--no-stream` | Disable streaming chat for providers with SSE/tool-call issues. |
-| `--dangerously-skip-permissions` | Auto-approve non-sensitive tool calls. |
-| `--list-tools` / `--list-skills` | Print registered tools or discovered skills. |
-| `--log <path>` | Override the JSON-lines log path. |
-| `--debug-session` | Write a complete JSON-lines debug log for the interactive session. |
-| `--debug-session-path <path>` | Write the debug session log to a custom path. |
-| `--version` / `--help` | Print version or help. |
+| `./.pentesterflow/intelligence/scenarios.jsonl` | Project-specific intelligence for the current engagement/workspace. |
+| `~/.pentesterflow/intelligence/scenarios.jsonl` | Personal reusable intelligence across future projects. |
 
-### Slash Commands
+How it behaves:
+
+- Learning runs in the background after completed turns and compactions.
+- Retrieval is silent and injected as hidden context only when relevant.
+- Duplicate project/personal memories are deduped before reaching the model.
+- Secrets are redacted before storage.
+- Learning failures are logged, not shown as user-facing task errors.
+
+This keeps the user experience simple while making the agent more effective over
+time.
+
+## Session Memory And Resume
+
+PentesterFlow saves sessions under `~/.pentesterflow/sessions/*.json`.
+
+```sh
+ls -lt ~/.pentesterflow/sessions/*.json | head
+pentesterflow --resume <session-id>
+```
+
+Session continuity includes:
+
+- Saved conversation history.
+- Persistent compacted memory.
+- Target state.
+- Resume recap on startup.
+- Context snapshots under `~/.pentesterflow/context/`.
+- Five-minute automatic snapshots during active sessions.
+
+Useful commands:
+
+| Command | Purpose |
+|---|---|
+| `/compact` | Summarize the current session into persistent memory. |
+| `/memory` | Show current session memory. |
+| `/snapshot` | Write a redacted context snapshot immediately. |
+| `/next [objective]` | Ask for coverage-driven next steps. |
+
+## Burp Integration
+
+Start the local PentesterFlow listener:
+
+```sh
+pentesterflow --burp
+pentesterflow --burp 9999
+```
+
+From source:
+
+```sh
+npm run dev -- --burp 9999
+```
+
+The Burp/PentesterFlow bridge supports:
+
+- Sending selected Burp requests into PentesterFlow.
+- Queuing requests as scan tasks.
+- Importing confirmed findings back into Burp issues.
+- Preserving full raw requests for evidence and replay.
+- Reading captured requests and issues through `browser_capture_*` tools.
+
+The default listener is `http://127.0.0.1:9999`.
+
+## Browser Capture And MCP
+
+`pentesterflow --burp` starts a local ingest server for captured requests,
+endpoints, and browser snapshots. The companion `pentesterflow-browser-mcp`
+binary exposes the same capture data as an MCP server for compatible clients.
+
+```json
+{
+  "mcpServers": {
+    "pentesterflow-browser": {
+      "command": "pentesterflow-browser-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+## Slash Commands
 
 | Command | Description |
 |---|---|
 | `/help` | Show keybindings and command reference. |
-| `/provider` | Pick a backend and model interactively. |
-| `/model <id>` / `/model list` | Switch model or list available backend models. |
-| `/plan [objective]` | Start a plan-only turn without tool execution. |
+| `/provider` | Pick backend, API key, and model interactively. |
+| `/model <id>` / `/model list` | Switch or list backend models. |
+| `/plan [objective]` | Plan-only turn without tool execution. |
+| `/next [objective]` | Coverage-driven next test suggestions. |
 | `/target <url>` | Set or clear the engagement base URL. |
-| `/skills [enable\|disable\|new <name>]` | Manage skills or scaffold a new skill. |
+| `/compact` | Summarize into persistent session memory. |
+| `/memory` | Show current persistent session memory. |
+| `/snapshot` | Write a redacted context snapshot now. |
+| `/burp [port]` | Start the local Burp/PentesterFlow bridge. |
+| `/skills [enable\|disable\|new <name>]` | Manage or scaffold skills. |
 | `/maxsteps <n>` | Set the per-turn tool-call cap. |
 | `/thinking on\|off` | Toggle visible reasoning guidance. |
-| `/update [version]` | Fetch the GitHub release installer and install the latest or pinned version. |
-| `/yolo [on\|off]` | Toggle auto-approval mode. |
+| `/update [version]` | Install the latest or pinned release. |
+| `/yolo [on\|off]` | Toggle auto-approval mode for labs. |
 | `/reset` | Clear conversation and saved session state. |
 | `/clear` | Clear only the on-screen transcript. |
 | `/<skill-name>` | Load a skill into the next turn. |
 | `/exit` | Quit. |
 
-## How It Works
+## Command-Line Flags
 
-1. **Scope**: set a target and constraints before testing.
-2. **Plan**: select the relevant methodology, risk level, and skill playbook.
-3. **Act**: call approved tools such as `http`, `shell`, file tools, browser capture, or MCP servers.
-4. **Observe**: compare responses, status codes, headers, timing, and account boundaries.
-5. **Verify**: reproduce the issue with a clean command or request.
-6. **Report**: persist confirmed issues through `confirm_finding`.
+| Flag | Description |
+|---|---|
+| `--backend ollama\|lmstudio\|kimi\|groq\|gemini\|openai-compat` | Select the LLM backend. |
+| `--model <id>` | Set the model id. |
+| `--base-url <url>` / `--api-key <key>` | Configure remote or OpenAI-compatible backends. |
+| `--skills <dirs>` | Load extra skill directories. |
+| `--resume <session-id>` | Resume a saved session and show recap. |
+| `--browser` | Enable Browser MCP tools for the current session. |
+| `--burp [port]` | Start the local Burp/PentesterFlow bridge. |
+| `--browser-ingest [port]` | Deprecated alias for `--burp`. |
+| `--no-stream` | Disable streaming for providers with SSE/tool-call issues. |
+| `--dangerously-skip-permissions` | Auto-approve non-sensitive tool calls. |
+| `--list-tools` / `--list-skills` | Print registered tools or discovered skills. |
+| `--log <path>` | Override the JSON-lines log path. |
+| `--debug-session` | Write a full JSON-lines debug session log. |
+| `--debug-session-path <path>` | Write debug session log to a custom path. |
+| `--version` / `--help` | Print version or help. |
 
 ## Tools
 
 | Tool | Purpose |
 |---|---|
 | `shell` / `BashTool` | Run shell commands with approval and safety checks. |
-| `http` | Send HTTP/HTTPS requests against full URLs or the active `/target`. |
+| `http` | Send HTTP/HTTPS requests against full URLs or active `/target`. |
 | `file_read` / `file_write` / `file_edit` | Read, create, and patch files. |
 | `GlobTool` / `GrepTool` | Discover files and search content. |
 | `web_fetch` / `web_search` | Fetch pages or run web searches. |
-| `ask_user` | Ask for a decision when scope or testing direction is ambiguous. |
-| `confirm_finding` | Save a verified finding to `./findings/<slug>.md`. |
-| `coverage` | Track tested endpoints, parameters, and vulnerability classes. |
-| `load_skill` | Load a methodology playbook into context. |
-| `browser_capture_*` | Query captured browser traffic, requests, endpoints, and snapshots. |
+| `ask_user` | Ask for a decision when scope or direction is ambiguous. |
+| `confirm_finding` | Save verified findings to `./findings/<slug>.md`. |
+| `coverage` | Track tested endpoint/parameter/vulnerability-class tuples. |
+| `load_skill` | Load methodology playbooks into context. |
+| `browser_capture_*` | Query captured browser/Burp traffic, endpoints, requests, issues, and snapshots. |
 
 ## Skills
 
-Skills are versioned Markdown playbooks that package methodology, payloads, and
-decision logic. Built-in skills include:
+Skills are Markdown playbooks that package methodology, payloads, and tool
+constraints. Built-in skills include:
 
 | Skill | Focus |
 |---|---|
@@ -252,36 +387,46 @@ decision logic. Built-in skills include:
 | `supabase` | Row-Level Security and anonymous access mistakes. |
 | `deserialize` | Unsafe deserialization sinks and gadget-chain testing. |
 
-Discovery order is built-in `skills/`, project-local
-`./.pentesterflow/skills/`, personal `~/.pentesterflow/skills/`, then any
-directory passed with `--skills`. Later entries win on name collisions.
+Discovery order:
 
-## Browser Capture
+1. Built-in `skills/`
+2. Project-local `./.pentesterflow/skills/`
+3. Personal `~/.pentesterflow/skills/`
+4. Directories passed with `--skills`
 
-`pentesterflow --burp` starts a local ingest server on
-`127.0.0.1:9999` for captured requests and snapshots. The companion
-`pentesterflow-browser-mcp` binary exposes the same capture data as an MCP
-server for compatible clients.
+Later entries win on name collisions.
 
-```json
-{
-  "mcpServers": {
-    "pentesterflow-browser": {
-      "command": "pentesterflow-browser-mcp",
-      "args": []
-    }
-  }
-}
+## Reporting
+
+The `confirm_finding` tool writes confirmed issues to:
+
+```text
+./findings/<slug>.md
 ```
+
+Reports include:
+
+- Title and severity.
+- Affected URL, method, parameter, and payload when available.
+- Response excerpt proving the issue.
+- Impact and remediation.
+- Copy-pasteable curl reproduction command.
+- Raw request material for Burp issue import when available.
 
 ## Security Model
 
-- **Authorized use only**: PentesterFlow is built for permitted security work.
-- **Human approval**: permission-gated tools require allow once, allow session, or deny.
-- **Sensitive path protection**: secrets and high-risk local paths stay gated even in YOLO mode.
-- **Shell safeguards**: catastrophic commands are blocked before execution.
-- **Transcript control**: compacting and export paths redact common credential formats.
-- **Transparent evidence**: findings should include the request, response signal, impact, and remediation.
+- **Authorized use only**: built for permitted security work.
+- **Human-in-the-loop by default**: permission-gated tools require allow once,
+  allow session, or deny.
+- **Sensitive path protection**: high-risk local paths remain gated.
+- **Shell safeguards**: catastrophic command patterns are blocked before
+  execution.
+- **Credential redaction**: compaction, snapshots, and learning paths redact
+  common secret formats.
+- **Transparent evidence**: findings should be backed by reproducible requests
+  and observed responses.
+- **Auditability**: sessions, logs, findings, coverage, and release artifacts are
+  written to deterministic local paths.
 
 ## Configuration And Data
 
@@ -289,14 +434,18 @@ server for compatible clients.
 |---|---|
 | `~/.pentesterflow/config.json` | Backend, model, endpoint, and disabled-skill settings. |
 | `~/.pentesterflow/sessions/*.json` | Saved sessions for `--resume`. |
+| `~/.pentesterflow/context/*.md` | Redacted context snapshots. |
+| `./.pentesterflow/intelligence/scenarios.jsonl` | Project intelligence learned from this workspace. |
+| `~/.pentesterflow/intelligence/scenarios.jsonl` | Personal reusable intelligence across projects. |
 | `~/.pentesterflow/builtin-skills/<name>/SKILL.md` | Installer-managed shipped skills. |
 | `~/.pentesterflow/skills/<name>/SKILL.md` | Personal skills. |
 | `./.pentesterflow/skills/<name>/SKILL.md` | Project-local skills. |
 | `./findings/<slug>.md` | Confirmed findings for the current engagement. |
+| `./findings/coverage-<session-id>.json` | Coverage state for endpoint/parameter/vulnerability-class testing. |
 | `~/.pentesterflow/logs/pentesterflow.log` | Structured JSON-lines logs. |
-| `~/.pentesterflow/debug/session-*.jsonl` | Opt-in complete session debug logs from `--debug-session`. |
+| `~/.pentesterflow/debug/session-*.jsonl` | Opt-in full session debug logs. |
 
-Enable a complete debug log when reproducing usage issues:
+Enable complete debug logs when reproducing usage issues:
 
 ```sh
 pentesterflow --debug-session
@@ -304,15 +453,15 @@ PENTESTERFLOW_DEBUG_SESSION=1 pentesterflow
 PENTESTERFLOW_DEBUG_SESSION=1 PENTESTERFLOW_DEBUG_SESSION_PATH=/tmp/pf-debug.jsonl pentesterflow
 ```
 
-Debug session logs include prompts, assistant events, tool calls, tool results,
-errors, and shutdown markers. Treat them as sensitive because they can contain
-target data, command output, and copied request material.
+Treat debug logs as sensitive because they can contain target data, command
+output, and copied request material.
 
 ## Develop
 
 ```sh
 npm install
 npm run dev -- --version
+npm run dev -- --burp 9999
 npm run typecheck
 npm run lint
 npm run test
