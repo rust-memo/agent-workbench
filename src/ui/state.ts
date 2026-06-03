@@ -7,7 +7,7 @@ import { displayToolName, formatToolResult, primaryToolArg } from '../tools/tool
 import type { BannerData } from './Banner.js';
 import type { AskRequest } from './askBridge.js';
 import type { PermissionRequest } from './permBridge.js';
-import { buildToolResultView } from './toolResultFormat.js';
+import { buildToolResultView, shellResultExitStatus } from './toolResultFormat.js';
 
 export interface TranscriptEntry {
   kind:
@@ -396,6 +396,42 @@ function isSuccessfulEmptyShellResult(result: string): boolean {
   return plain === 'exit: 0\nstdout:';
 }
 
+function isEmptyShellExit(result: string, exit: string): boolean {
+  const plain = result.replace(/\r\n/g, '\n').trimEnd();
+  return plain === `exit: ${exit}\nstdout:`;
+}
+
+function previousShellCallWasSearch(transcript: TranscriptEntry[]): boolean {
+  const prev = transcript.at(-1);
+  if (!prev || prev.kind !== 'tool-call') return false;
+  return /(^|\s|\||\$ )(grep|rg)(\s|$)/.test(prev.text);
+}
+
+function toolResultPrefix(
+  name: string,
+  err: string,
+  result: string,
+  durationMs: number,
+  transcript: TranscriptEntry[],
+): string {
+  if (err) return `[error] ${displayToolName(name)}: ${err}`;
+  if (isShellTool(name)) {
+    const exit = shellResultExitStatus(result);
+    if (exit && exit !== '0') {
+      if (
+        exit === '1' &&
+        isEmptyShellExit(result, exit) &&
+        previousShellCallWasSearch(transcript)
+      ) {
+        return `[no match] ${displayToolName(name)} (${durationMs}ms)`;
+      }
+      const label = exit.startsWith('timeout') ? 'timeout' : `exit ${exit}`;
+      return `[${label}] ${displayToolName(name)} (${durationMs}ms)`;
+    }
+  }
+  return `[ok] ${displayToolName(name)} (${durationMs}ms)`;
+}
+
 function formatCompactEvent(ev: Extract<AgentEvent, { type: 'compact' }>): string {
   const meta: string[] = [];
   if (typeof ev.tokensBefore === 'number' && typeof ev.tokensAfter === 'number') {
@@ -451,9 +487,23 @@ function applyAgentEvent(state: AppState, ev: AgentEvent): AppState {
         };
       }
 
-      const prefix = ev.err
-        ? `[error] ${displayToolName(ev.name)}: ${ev.err}`
-        : `[ok] ${displayToolName(ev.name)} (${ev.durationMs}ms)`;
+      const prefix = toolResultPrefix(ev.name, ev.err, ev.result, ev.durationMs, state.transcript);
+      if (
+        !ev.err &&
+        isShellTool(ev.name) &&
+        shellResultExitStatus(ev.result) === '1' &&
+        isEmptyShellExit(ev.result, '1') &&
+        previousShellCallWasSearch(state.transcript)
+      ) {
+        return {
+          ...state,
+          phase: 'answering',
+          transcript: [
+            ...state.transcript,
+            { kind: 'tool-result', text: `${prefix}\n(no matches)` },
+          ],
+        };
+      }
       // Some tools have a compact one-line display form for their JSON
       // result (e.g. browser_capture_status). Use it when present; the
       // model still receives the raw JSON via the tool message.

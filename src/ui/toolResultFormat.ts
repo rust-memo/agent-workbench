@@ -77,15 +77,15 @@ export function looksLikeShellResult(body: string): boolean {
 }
 
 function parseShellResult(body: string): ShellResultParts | null {
-  const lines = body.split('\n');
+  const lines = body.split('\n').map((line) => line.replace(/\r$/, ''));
   const first = lines[0] ?? '';
   const exitMatch = first.match(EXIT_RE);
   if (!exitMatch) return null;
 
-  const stdoutIdx = lines.indexOf(STDOUT_LABEL, 1);
+  const stdoutIdx = lines.findIndex((line, idx) => idx > 0 && line.trim() === STDOUT_LABEL);
   if (stdoutIdx === -1) return null;
 
-  const stderrIdx = lines.indexOf(STDERR_LABEL, stdoutIdx + 1);
+  const stderrIdx = lines.findIndex((line, idx) => idx > stdoutIdx && line.trim() === STDERR_LABEL);
   const stdoutLines =
     stderrIdx === -1 ? lines.slice(stdoutIdx + 1) : lines.slice(stdoutIdx + 1, stderrIdx);
   const stderrLines = stderrIdx === -1 ? [] : lines.slice(stderrIdx + 1);
@@ -106,6 +106,12 @@ function trimTrailingBlankLines(lines: string[]): string[] {
 
 function compactShellResultForTranscript(body: string): string {
   const parsed = parseShellResult(body);
+  if (parsed && parsed.exit !== '0' && !parsed.stderr && !parsed.rest && !parsed.stdout) {
+    return `exit: ${parsed.exit}\n(no output)`;
+  }
+  if (parsed && parsed.exit !== '0' && parsed.stderr && !parsed.rest && !parsed.stdout) {
+    return `exit: ${parsed.exit}\nstderr:\n${parsed.stderr}`;
+  }
   if (
     !parsed ||
     parsed.exit !== '0' ||
@@ -117,6 +123,10 @@ function compactShellResultForTranscript(body: string): string {
     return body;
   }
   return parsed.stdout;
+}
+
+export function shellResultExitStatus(body: string): string | null {
+  return parseShellResult(body)?.exit ?? null;
 }
 
 // ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import * as config from '../config/config.js';
 import { CoverageStore } from '../coverage/store.js';
 import { findingRequestForBurp } from '../findings/httpRequest.js';
 import { Store as FindingsStore } from '../findings/store.js';
+import { IntelligenceStore } from '../intelligence/store.js';
 import * as llmFactory from '../llm/factory.js';
 import { modelReliabilityWarning } from '../llm/modelWarnings.js';
 import { detectOllamaContextWindow, probeToolSupport } from '../llm/probe.js';
@@ -332,6 +333,7 @@ async function main(): Promise<number> {
   // Coverage tracking: which (endpoint, param, vuln_class) tuples the
   // agent has tried. Persists alongside findings so resumes keep state.
   const coverageStore = new CoverageStore(`findings/coverage-${sessionID}.json`);
+  const intelligenceStore = new IntelligenceStore();
 
   // Tools.
   const tools = new ToolRegistry();
@@ -482,14 +484,17 @@ async function main(): Promise<number> {
     autoCompactThreshold: effectiveAutoCompactThreshold(cfg),
     toolingProfile: cfg.tooling_profile,
     promptProfile: effectivePromptProfile(cfg),
+    intelligence: intelligenceStore,
     // --no-stream takes precedence over the config default so users can
     // toggle off streaming for a single launch without rewriting config.
     streamingEnabled: flags.noStream ? false : cfg.streaming_enabled,
   });
 
+  let resumeSummary = '';
   if (resuming) {
     try {
       agent.resumeSaved();
+      resumeSummary = buildResumeSummary(sessionID, agent.formatMemory());
     } catch (err) {
       process.stderr.write(`resume: ${(err as Error).message}\n`);
       return 1;
@@ -639,6 +644,7 @@ async function main(): Promise<number> {
         bindNoticePublisher: (publish) => {
           noticeHolder.publish = publish;
         },
+        resumeSummary,
         sessionDebug,
         setYolo: (on: boolean) => prompter.setYolo(on),
         onSkillCreated,
@@ -755,6 +761,10 @@ function effectiveAutoCompactThreshold(cfg: config.Config): number {
 
 function effectivePromptProfile(cfg: config.Config): PromptProfile {
   return cfg.backend === 'groq' || cfg.backend === 'gemini' ? 'compact' : 'full';
+}
+
+function buildResumeSummary(sessionID: string, memory: string): string {
+  return [`Resumed session ${sessionID}`, '', 'Previous session recap:', '', memory].join('\n');
 }
 
 function prettyCwd(): string {

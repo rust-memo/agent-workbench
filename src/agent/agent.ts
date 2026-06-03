@@ -3,6 +3,7 @@
 // via the provided sink (a callback or async-iterator adapter). emit()
 // honors the signal so a wedged TUI can't keep the agent stuck.
 
+import { type IntelligenceStore, formatIntelligenceContext } from '../intelligence/store.js';
 import type { Client, StreamingClient } from '../llm/client.js';
 import { isStreaming } from '../llm/client.js';
 import type { ChatRequest, Message } from '../llm/types.js';
@@ -51,6 +52,8 @@ export interface AgentOptions {
    *  `chatStream()`. Useful for backends/models where streaming is
    *  flaky (e.g. tool calls vanish from SSE deltas). Default: true. */
   streamingEnabled?: boolean;
+  /** Local scan-intelligence dataset used to improve coverage across sessions. */
+  intelligence?: IntelligenceStore | null;
 }
 
 /** How many consecutive auto-compaction failures we tolerate before
@@ -68,6 +71,7 @@ export class Agent {
   readonly prompter: Prompter;
   readonly store: Store | null;
   readonly target: Target;
+  readonly intelligence: IntelligenceStore | null;
 
   private thinking: boolean;
   private maxSteps: number;
@@ -95,6 +99,7 @@ export class Agent {
     this.skills = opts.skills;
     this.prompter = opts.prompter;
     this.store = opts.store ?? null;
+    this.intelligence = opts.intelligence ?? null;
     this.target = opts.target;
     this.thinking = opts.thinkingEnabled ?? false;
     this.maxSteps = opts.maxSteps && opts.maxSteps > 0 ? opts.maxSteps : 20;
@@ -473,6 +478,7 @@ export class Agent {
         return;
       }
       this.memory = mergeMemory(this.memory, summary);
+      await this.learnIntelligence(summary);
       this.history = [
         { role: 'system', content: this.sysPrompt },
         {
@@ -540,6 +546,10 @@ export class Agent {
     if (decision && last) {
       working.splice(working.length - 1, 0, { role: 'system', content: decision.guidance });
     }
+    const intelligenceContext = this.buildIntelligenceContext(userMsg);
+    if (intelligenceContext && last) {
+      working.splice(working.length - 1, 0, { role: 'system', content: intelligenceContext });
+    }
     if (last) last.content = expandFileMentions(userMsg);
 
     const maxSteps = this.maxSteps;
@@ -574,6 +584,7 @@ export class Agent {
         emit({ type: 'assistant-text', text: resp.message.content });
       }
       if (!hasToolCalls) {
+        await this.learnIntelligence(buildTurnLearningText(userMsg, resp.message.content));
         return;
       }
 
@@ -761,6 +772,7 @@ export class Agent {
       throw new Error('compact returned empty summary');
     }
     this.memory = mergeMemory(this.memory, summary);
+    await this.learnIntelligence(summary);
     this.history = [
       { role: 'system', content: this.sysPrompt },
       {
@@ -786,6 +798,32 @@ export class Agent {
     if (!this.store) return;
     await this.store.save(this.history, this.target, this.memory);
   }
+
+  private buildIntelligenceContext(userMsg: string): string {
+    if (!this.intelligence) return '';
+    const query = [
+      userMsg,
+      this.target.baseURL(),
+      this.target.name(),
+      this.memory?.lastSummary ?? '',
+      ...(this.memory?.objectives ?? []),
+      ...(this.memory?.tested ?? []),
+      ...(this.memory?.files ?? []),
+      ...(this.memory?.todos ?? []),
+    ].join('\n');
+    const results = this.intelligence.search(query, 5).filter((r) => r.score >= 6);
+    return formatIntelligenceContext(results);
+  }
+
+  private async learnIntelligence(summary: string): Promise<void> {
+    if (!this.intelligence) return;
+    const sourceSessionId = this.store?.id || undefined;
+    try {
+      await this.intelligence.learnFromText(summary, sourceSessionId);
+    } catch (err) {
+      logError('agent: intelligence learning failed', { err: errMessage(err) });
+    }
+  }
 }
 
 // ---------- helpers ----------
@@ -796,6 +834,16 @@ function ensureSystemPrompt(messages: Message[], prompt: string): Message[] {
   }
   if (messages[0].content === prompt) return messages;
   return [{ role: 'system', content: prompt }, ...messages.slice(1)];
+}
+
+function buildTurnLearningText(userMsg: string, assistantMsg: string): string {
+  return [
+    '## User preferences and working style',
+    userMsg,
+    '',
+    '## Task outcome',
+    assistantMsg,
+  ].join('\n');
 }
 
 function emptyMemory(): SessionMemory {

@@ -103,6 +103,8 @@ export interface AppProps {
   bindNoticePublisher?: (publish: (text: string) => void) => void;
   /** Start the local Burp/PentesterFlow bridge on demand from /burp. */
   startBurpBridge?: (port?: number) => Promise<{ url: string; alreadyRunning: boolean }>;
+  /** Optional recap inserted once when a saved session is resumed. */
+  resumeSummary?: string;
 }
 
 export function App({
@@ -121,6 +123,7 @@ export function App({
   onSkillCreated,
   bindNoticePublisher,
   startBurpBridge,
+  resumeSummary,
 }: AppProps): JSX.Element {
   const [state, dispatch] = useReducer(reducer, '', () => {
     const s = initialState('', bannerData);
@@ -139,11 +142,18 @@ export function App({
   const { stdout } = useStdout();
   const runCtl = useRef<AbortController | null>(null);
   const snapshotSaving = useRef(false);
+  const resumeSummaryShown = useRef(false);
 
   // Physically clear the terminal (screen + scrollback) for /clear and
   // /reset. Ink reprints the banner afterwards via the Static remount that
   // the `clear` action triggers (clearGen bump).
   const clearScreen = useCallback(() => stdout.write(CLEAR_SCREEN), [stdout]);
+
+  useEffect(() => {
+    if (resumeSummaryShown.current || !resumeSummary) return;
+    resumeSummaryShown.current = true;
+    dispatch({ type: 'append', entry: { kind: 'system', text: resumeSummary } });
+  }, [resumeSummary]);
 
   // Toggle YOLO in one place: flip the real gate (prompter) AND the
   // displayed pill together so they can never disagree.

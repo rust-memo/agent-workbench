@@ -6,6 +6,8 @@
 import { describe, expect, it } from 'vitest';
 import { initialState, reducer } from './state.js';
 
+const ESC = String.fromCharCode(0x1b);
+const stripAnsi = (s: string) => s.replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '');
 const seed = () => initialState('');
 
 describe('state.reducer tool-call preview', () => {
@@ -358,6 +360,72 @@ describe('state.reducer tool-result body', () => {
     });
     const last = out.transcript[out.transcript.length - 1];
     expect(last?.text).toBe('[ok] shell (12ms)\n101');
+  });
+
+  it('labels non-zero empty BashTool output by exit code without blank stdout', () => {
+    const out = reducer(seed(), {
+      type: 'agent-event',
+      event: {
+        type: 'tool-result',
+        id: 'c1',
+        name: 'BashTool',
+        result: 'exit: 1\nstdout:\n',
+        err: '',
+        durationMs: 15,
+      },
+    });
+    const last = out.transcript[out.transcript.length - 1];
+    expect(stripAnsi(last?.text ?? '')).toBe('[exit 1] BashTool (15ms)\nexit: 1\n(no output)');
+  });
+
+  it('renders grep no-match as no match instead of generic exit 1', () => {
+    let out = reducer(seed(), {
+      type: 'agent-event',
+      event: {
+        type: 'tool-call',
+        id: 'c1',
+        name: 'BashTool',
+        args: {},
+        argsJSON:
+          '{"command":"curl -ksS -I \\"https://www.nogal-furniture.com/dashboard/login\\" | grep -iE \\"x-frame|frame\\""}',
+      },
+    });
+    out = reducer(out, {
+      type: 'agent-event',
+      event: {
+        type: 'tool-result',
+        id: 'c1',
+        name: 'BashTool',
+        result: 'exit: 1\nstdout:\n',
+        err: '',
+        durationMs: 735,
+      },
+    });
+    const last = out.transcript[out.transcript.length - 1];
+    expect(stripAnsi(last?.text ?? '')).toBe('[no match] BashTool (735ms)\n(no matches)');
+  });
+
+  it('labels BashTool stderr-only failures by exit code', () => {
+    const out = reducer(seed(), {
+      type: 'agent-event',
+      event: {
+        type: 'tool-result',
+        id: 'c1',
+        name: 'BashTool',
+        result: [
+          'exit: 2',
+          'stdout:',
+          'stderr:',
+          "/bin/bash: -c: line 0: unexpected EOF while looking for matching `''",
+          '/bin/bash: -c: line 1: syntax error: unexpected end of file',
+        ].join('\n'),
+        err: '',
+        durationMs: 2,
+      },
+    });
+    const plain = stripAnsi(out.transcript.at(-1)?.text ?? '');
+    expect(plain).toContain('[exit 2] BashTool (2ms)\nexit: 2\nstderr:\n/bin/bash');
+    expect(plain).not.toContain('stdout:');
   });
 
   it('renders ask_user answers without raw JSON', () => {

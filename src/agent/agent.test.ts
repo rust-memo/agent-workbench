@@ -3,7 +3,11 @@
 //   - signal abort propagates
 //   - tool failure surfaces as tool-result with err
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { IntelligenceStore } from '../intelligence/store.js';
 import type { Client } from '../llm/client.js';
 import type { ChatRequest, ChatResponse } from '../llm/types.js';
 import { AlwaysAllow } from '../permission/permission.js';
@@ -243,6 +247,81 @@ describe('Agent.run', () => {
       role: 'user',
       content: 'enumerate subdomains for example.com',
     });
+  });
+
+  it('injects local intelligence guidance for matching scan context', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'pf-agent-intel-'));
+    try {
+      const client = new FakeClient([
+        {
+          message: { role: 'assistant', content: 'ok' },
+          finishReason: 'stop',
+        },
+      ]);
+      const agent = new Agent({
+        client,
+        tools: new ToolRegistry(),
+        skills: new SkillRegistry(),
+        prompter: new AlwaysAllow(),
+        store: null,
+        target: new Target(),
+        intelligence: new IntelligenceStore({ cwd: join(tmp, 'project'), home: join(tmp, 'home') }),
+      });
+      const { sink } = collect();
+      await agent.run(
+        'scan a Node Express app where /server.js and /package.json were exposed',
+        new AbortController().signal,
+        sink,
+        { tools: false },
+      );
+
+      const messages = client.requests[0]?.messages ?? [];
+      expect(messages.some((m) => m.content.includes('Local PentesterFlow Intelligence'))).toBe(
+        true,
+      );
+      expect(messages.some((m) => m.content.includes('ecosystem.config.js'))).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('learns continuous memory from completed turns', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'pf-agent-learn-'));
+    try {
+      const client = new FakeClient([
+        {
+          message: { role: 'assistant', content: 'noted' },
+          finishReason: 'stop',
+        },
+      ]);
+      const intelligence = new IntelligenceStore({
+        cwd: join(tmp, 'project'),
+        home: join(tmp, 'home'),
+      });
+      const agent = new Agent({
+        client,
+        tools: new ToolRegistry(),
+        skills: new SkillRegistry(),
+        prompter: new AlwaysAllow(),
+        store: null,
+        target: new Target(),
+        intelligence,
+      });
+      const { sink } = collect();
+
+      await agent.run(
+        'I prefer concise final answers with verification commands.',
+        new AbortController().signal,
+        sink,
+        { tools: false },
+      );
+
+      expect(
+        intelligence.search('concise final answers verification', 3)[0]?.scenario.category,
+      ).toBe('user-preference');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it('skips decision guidance for plan-only turns', async () => {

@@ -49,6 +49,21 @@ interface OAIStreamResp {
   }>;
 }
 
+const LMSTUDIO_STOP_TOKENS = [
+  '<|user|>',
+  '<|assistant|>',
+  '<|system|>',
+  '<|observation|>',
+  '<|tool|>',
+  '<|tool_call|>',
+  '<|tool_response|>',
+  '<|function|>',
+  '<|end|>',
+  '<|im_end|>',
+  '<|im_start|>',
+  '<|endoftext|>',
+];
+
 export class OpenAIClient implements Client, StreamingClient, Pinger {
   readonly baseURL: string;
   readonly apiKey: string;
@@ -113,7 +128,7 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
     if (!choice) throw new Error(`${this.label}: empty choices`);
     const msg: Message = {
       role: 'assistant',
-      content: choice.message.content ?? '',
+      content: this.trimLeakedTemplate(choice.message.content ?? ''),
     };
     if (choice.message.tool_calls?.length) {
       msg.toolCalls = choice.message.tool_calls.map<ToolCall>((tc) => ({
@@ -150,11 +165,14 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
       throw new Error(`${this.label}: empty stream body`);
     }
 
-    let content = '';
+    let rawContent = '';
+    let emittedLen = 0;
     let finish = '';
     const parts = new Map<number, { id: string; name: string; args: string }>();
+    let stoppedByTemplate = false;
 
     for await (const line of iterSSE(resp.body)) {
+      if (stoppedByTemplate) break;
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
       if (data === '[DONE]') break;
@@ -168,8 +186,18 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
       if (!choice) continue;
       if (choice.finish_reason) finish = choice.finish_reason;
       if (choice.delta.content) {
-        content += choice.delta.content;
-        onDelta(choice.delta.content);
+        rawContent += choice.delta.content;
+        const view = this.streamingTemplateView(rawContent);
+        const emitText = view.visible.slice(emittedLen);
+        if (emitText) {
+          onDelta(emitText);
+          emittedLen += emitText.length;
+        }
+        if (view.stopped) {
+          rawContent = view.visible;
+          stoppedByTemplate = true;
+          break;
+        }
       }
       for (const tc of choice.delta.tool_calls ?? []) {
         const existing = parts.get(tc.index) ?? { id: '', name: '', args: '' };
@@ -180,7 +208,11 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
       }
     }
 
-    const msg: Message = { role: 'assistant', content };
+    const finalContent = this.trimLeakedTemplate(rawContent);
+    if (!stoppedByTemplate && finalContent.length > emittedLen) {
+      onDelta(finalContent.slice(emittedLen));
+    }
+    const msg: Message = { role: 'assistant', content: finalContent };
     const indexes = Array.from(parts.keys()).sort((a, b) => a - b);
     if (indexes.length > 0) {
       msg.toolCalls = indexes.map<ToolCall>((i) => {
@@ -222,6 +254,7 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
         };
       }>;
       thinking?: { type: 'disabled' };
+      stop?: string[];
     } = {
       model: this.modelID,
       stream,
@@ -259,8 +292,47 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
     if (this.label === 'kimi') {
       body.thinking = { type: 'disabled' };
     }
+    if (this.label === 'lmstudio') {
+      body.stop = LMSTUDIO_STOP_TOKENS;
+    }
     return body;
   }
+
+  private trimLeakedTemplate(content: string): string {
+    if (this.label !== 'lmstudio') return content;
+    return trimAtFirstStop(content, LMSTUDIO_STOP_TOKENS);
+  }
+
+  private streamingTemplateView(raw: string): { visible: string; stopped: boolean } {
+    if (this.label !== 'lmstudio') return { visible: raw, stopped: false };
+    const idx = firstStopIndex(raw, LMSTUDIO_STOP_TOKENS);
+    if (idx >= 0) return { visible: raw.slice(0, idx), stopped: true };
+    const hold = longestStopPrefixSuffix(raw, LMSTUDIO_STOP_TOKENS);
+    return { visible: hold > 0 ? raw.slice(0, -hold) : raw, stopped: false };
+  }
+}
+
+function trimAtFirstStop(content: string, stops: readonly string[]): string {
+  const idx = firstStopIndex(content, stops);
+  return idx >= 0 ? content.slice(0, idx).trimEnd() : content;
+}
+
+function firstStopIndex(content: string, stops: readonly string[]): number {
+  let best = -1;
+  for (const stop of stops) {
+    const idx = content.indexOf(stop);
+    if (idx >= 0 && (best === -1 || idx < best)) best = idx;
+  }
+  return best;
+}
+
+function longestStopPrefixSuffix(content: string, stops: readonly string[]): number {
+  const max = Math.min(content.length, Math.max(...stops.map((s) => s.length - 1)));
+  for (let n = max; n > 0; n--) {
+    const suffix = content.slice(-n);
+    if (stops.some((stop) => stop.startsWith(suffix))) return n;
+  }
+  return 0;
 }
 
 /**

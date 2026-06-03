@@ -39,6 +39,32 @@ beforeAll(async () => {
         // some plain content first.
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         const send = (obj: unknown) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+        if (body.model === 'glm-stream-leak') {
+          send({ choices: [{ delta: { content: 'Hi! ' } }] });
+          send({ choices: [{ delta: { content: 'What can I help with?<|us' } }] });
+          send({ choices: [{ delta: { content: 'er|>hello hello hello' } }] });
+          send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
+        if (body.model === 'glm-observation-leak') {
+          send({ choices: [{ delta: { content: 'I will test the target.<|ob' } }] });
+          send({
+            choices: [
+              {
+                delta: {
+                  content:
+                    'servation|><|observation|>I got a 200 OK response and robots.txt was not found.',
+                },
+              },
+            ],
+          });
+          send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
         send({ choices: [{ delta: { content: 'Working' } }] });
         send({ choices: [{ delta: { content: ' on it' } }] });
         send({
@@ -73,6 +99,39 @@ beforeAll(async () => {
       }
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (body.model === 'glm-leak') {
+        res.end(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: 'Hi! What can I help you with today?<|user|>hello\nhello\nhello',
+                },
+                finish_reason: 'stop',
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      if (body.model === 'glm-observation-leak') {
+        res.end(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content:
+                    'I will test the target.<|observation|><|observation|>I got a 200 OK response.',
+                },
+                finish_reason: 'stop',
+              },
+            ],
+          }),
+        );
+        return;
+      }
       res.end(
         JSON.stringify({
           choices: [
@@ -133,5 +192,53 @@ describe('OpenAIClient', () => {
     const c = new OpenAIClient(baseURL, 'sk-kimi', 'kimi-k2.6', 'kimi');
     await c.chat({ model: 'kimi-k2.6', messages: [{ role: 'user', content: 'hi' }] });
     expect(lastBody?.thinking).toEqual({ type: 'disabled' });
+  });
+
+  it('adds LM Studio stop tokens and trims leaked chat-template roles', async () => {
+    const c = OpenAIClient.lmStudio(baseURL, 'glm-leak');
+    const out = await c.chat({ model: 'glm-leak', messages: [{ role: 'user', content: 'hello' }] });
+
+    expect(out.message.content).toBe('Hi! What can I help you with today?');
+    expect(lastBody?.stop).toContain('<|user|>');
+    expect(lastBody?.stop).toContain('<|observation|>');
+  });
+
+  it('trims leaked LM Studio observation markers in non-streaming responses', async () => {
+    const c = OpenAIClient.lmStudio(baseURL, 'glm-observation-leak');
+    const out = await c.chat({
+      model: 'glm-observation-leak',
+      messages: [{ role: 'user', content: 'test target' }],
+    });
+
+    expect(out.message.content).toBe('I will test the target.');
+    expect(out.message.content).not.toContain('<|observation|>');
+  });
+
+  it('withholds split LM Studio role tokens during streaming', async () => {
+    const c = OpenAIClient.lmStudio(baseURL, 'glm-stream-leak');
+    const deltas: string[] = [];
+    const out = await c.chatStream(
+      { model: 'glm-stream-leak', messages: [{ role: 'user', content: 'hello' }] },
+      (d) => deltas.push(d),
+    );
+
+    expect(deltas.join('')).toBe('Hi! What can I help with?');
+    expect(out.message.content).toBe('Hi! What can I help with?');
+    expect(deltas.join('')).not.toContain('<|user|>');
+    expect(deltas.join('')).not.toContain('hello hello');
+  });
+
+  it('withholds split LM Studio observation markers during streaming', async () => {
+    const c = OpenAIClient.lmStudio(baseURL, 'glm-observation-leak');
+    const deltas: string[] = [];
+    const out = await c.chatStream(
+      { model: 'glm-observation-leak', messages: [{ role: 'user', content: 'test target' }] },
+      (d) => deltas.push(d),
+    );
+
+    expect(deltas.join('')).toBe('I will test the target.');
+    expect(out.message.content).toBe('I will test the target.');
+    expect(deltas.join('')).not.toContain('<|observation|>');
+    expect(deltas.join('')).not.toContain('200 OK');
   });
 });

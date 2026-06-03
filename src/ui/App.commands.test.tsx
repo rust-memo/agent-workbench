@@ -117,6 +117,15 @@ describe('UI slash commands (terminal integration)', () => {
     expect(runSpy.mock.calls[0][0]).toBe('find idors on the api');
   });
 
+  it('shows a resumed-session recap when provided', async () => {
+    mounted = renderApp({
+      resumeSummary: 'Resumed session abc123\n\nPrevious session recap:\n\nDone work',
+    });
+    await tick();
+    expect(mounted.lastFrame()).toContain('Resumed session abc123');
+    expect(mounted.lastFrame()).toContain('Done work');
+  });
+
   it('collapses multi-line pasted text in the UI but sends the full text', async () => {
     mounted = renderApp();
     await tick();

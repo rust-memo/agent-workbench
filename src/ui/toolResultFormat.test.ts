@@ -103,6 +103,20 @@ describe('buildToolResultView', () => {
     expect(stripAnsi(v.preview)).toBe('404 ftp.gobus.net');
   });
 
+  it('removes exit/stdout wrappers from multiline successful shell output', () => {
+    const html = [
+      '<!DOCTYPE html>',
+      '<html lang="ar" dir="rtl">',
+      '<head>',
+      '  <meta charset="UTF-8" />',
+    ].join('\n');
+    const v = buildToolResultView(`exit: 0\r\nstdout:\r\n${html}`);
+    const plain = stripAnsi(v.preview);
+    expect(plain).toBe(html);
+    expect(plain).not.toContain('exit: 0');
+    expect(plain).not.toContain('stdout:');
+  });
+
   it('keeps shell structure when exit is non-zero or stderr exists', () => {
     const failed = buildToolResultView('exit: 1\nstdout:\nnope');
     expect(stripAnsi(failed.preview)).toContain('exit: 1');
@@ -111,6 +125,26 @@ describe('buildToolResultView', () => {
     const warned = buildToolResultView('exit: 0\nstdout:\nok\nstderr:\nwarning');
     expect(stripAnsi(warned.preview)).toContain('exit: 0');
     expect(stripAnsi(warned.preview)).toContain('stderr:\nwarning');
+  });
+
+  it('renders empty non-zero shell output as no output instead of a blank stdout block', () => {
+    const v = buildToolResultView('exit: 1\nstdout:\n');
+    expect(stripAnsi(v.preview)).toBe('exit: 1\n(no output)');
+  });
+
+  it('omits empty stdout when a non-zero shell result only has stderr', () => {
+    const v = buildToolResultView(
+      [
+        'exit: 2',
+        'stdout:',
+        'stderr:',
+        "/bin/bash: -c: line 0: unexpected EOF while looking for matching `''",
+        '/bin/bash: -c: line 1: syntax error: unexpected end of file',
+      ].join('\n'),
+    );
+    const plain = stripAnsi(v.preview);
+    expect(plain).toContain('exit: 2\nstderr:\n/bin/bash');
+    expect(plain).not.toContain('stdout:');
   });
 
   it('does not collapse short output', () => {

@@ -11,6 +11,21 @@ security engineers, professional penetration testers, and bug hunters.
 
 ### Added
 
+- **Continuous learning intelligence** — local project and personal knowledge
+  bases store redacted lessons from completed turns and compactions, including
+  user preferences, decisions, proven workflows, mistakes, tool/config patterns,
+  coverage gaps, finding patterns, and recon lessons. Relevant memories are
+  retrieved silently as hidden context so future sessions improve without
+  manual memory management.
+- **Resume recap** — `--resume <session-id>` now opens with a concise recap of
+  the previous session's persistent memory, similar to Codex-style session
+  continuity, so analysts can immediately see what happened before continuing.
+- **LM Studio stop-token handling** — OpenAI-compatible LM Studio responses now
+  send chat-template stop tokens and trim leaked markers such as `<|user|>` and
+  `<|observation|>` in both streaming and non-streaming paths.
+- **Cleaner shell transcript states** — search commands with no matches now show
+  `[no match]` instead of a misleading success line, and non-zero no-output
+  shell results render as `(no output)`.
 - **Kimi provider support** — first-class `kimi` backend, default Moonshot API
   settings, provider-scoped model listing, secret API-key prompt in the
   provider picker, and Kimi-compatible request shaping.
