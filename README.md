@@ -273,6 +273,11 @@ Useful commands:
 
 ## Burp Integration
 
+Use the companion
+[PentesterFlow Burp Integration](https://github.com/PentesterFlow/Burp-Integration)
+tool to send selected Burp traffic into the CLI and import confirmed findings
+back into Burp.
+
 Start the local PentesterFlow listener:
 
 ```sh
