@@ -85,3 +85,71 @@ describe('BridgedPrompter', () => {
     expect(denials).toBe(1);
   });
 });
+
+describe('BridgedPrompter concurrency (E1)', () => {
+  it('serializes concurrent asks so only one modal is ever open at once', async () => {
+    let open = 0;
+    let maxOpen = 0;
+    let pending: PermissionRequest | null = null;
+    const bridge = new BridgedPrompter((req) => {
+      if (req) {
+        open += 1;
+        maxOpen = Math.max(maxOpen, open);
+        pending = req;
+      } else {
+        open -= 1;
+      }
+    });
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+
+    // Two asks fired before either resolves — different cacheKeys so neither is
+    // served from cache.
+    const p1 = bridge.ask({ tool: 'http', summary: 's', detail: 'd', cacheKey: 'a' });
+    const p2 = bridge.ask({ tool: 'http', summary: 's', detail: 'd', cacheKey: 'b' });
+
+    expect(open).toBe(1); // only the first opened a modal; the second is parked
+
+    (pending as PermissionRequest | null)?.resolve('allow-once');
+    await p1;
+    await flush(); // let the lock hand off and the queued ask publish
+
+    expect(open).toBe(1); // first modal closed, second now open
+    (pending as PermissionRequest | null)?.resolve('allow-once');
+    await p2;
+
+    expect(maxOpen).toBe(1); // never two modals at the same time
+  });
+
+  it('coalesces a same-origin fan-out into one modal once allow-session lands', async () => {
+    let open = 0;
+    let maxOpen = 0;
+    let pending: PermissionRequest | null = null;
+    const bridge = new BridgedPrompter((req) => {
+      if (req) {
+        open += 1;
+        maxOpen = Math.max(maxOpen, open);
+        pending = req;
+      } else {
+        open -= 1;
+      }
+    });
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    const req = { tool: 'http', summary: 's', detail: 'd', cacheKey: 'https://t' };
+
+    // Three concurrent asks to the same origin — all miss the cache and queue.
+    const p1 = bridge.ask(req);
+    const p2 = bridge.ask(req);
+    const p3 = bridge.ask(req);
+    expect(open).toBe(1); // only the first opened a modal
+
+    (pending as PermissionRequest | null)?.resolve('allow-session');
+    const d1 = await p1;
+    await flush();
+    const [d2, d3] = await Promise.all([p2, p3]);
+
+    expect(d1).toBe('allow-session');
+    expect(d2).toBe('allow-once'); // served from cache after acquiring the lock
+    expect(d3).toBe('allow-once');
+    expect(maxOpen).toBe(1); // the queued asks never re-opened a modal
+  });
+});

@@ -674,6 +674,14 @@ function applyAgentEvent(state: AppState, ev: AgentEvent): AppState {
       };
     case 'skill-active':
       return { ...state, activeSkill: ev.name };
+    case 'memory-recall':
+      return {
+        ...state,
+        transcript: [
+          ...state.transcript,
+          { kind: 'system', text: `recalled memory: ${ev.names.join(', ')}` },
+        ],
+      };
     case 'done': {
       // End of turn: finalize a trailing streaming assistant entry so it
       // moves out of the live frame and into the committed scrollback log.

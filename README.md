@@ -273,9 +273,29 @@ Useful commands:
 | Command | Purpose |
 |---|---|
 | `/compact` | Summarize the current session into persistent memory. |
-| `/memory` | Show current session memory. |
+| `/memory` | Show saved facts + the session checkpoint. |
+| `/memory add <text>` | Save a durable fact (same as `#<text>`). |
+| `/memory list` | List saved facts. |
+| `/memory forget <text>` | Drop saved facts and checkpoint items matching the text. |
 | `/snapshot` | Write a redacted context snapshot immediately. |
 | `/next [objective]` | Ask for coverage-driven next steps. |
+
+### Saved memory (`#` quick-add)
+
+Type `#` followed by anything you want the agent to remember for the rest of
+this session and beyond — for example `#orders API is IDOR-prone on
+/api/orders/{id}`. Use `#!<text>` to save it to your **personal** scope instead
+of the project.
+
+- Saved facts are durable, human-readable Markdown — one file per fact with
+  frontmatter — under `./.pentesterflow/memory/` (project) and
+  `~/.pentesterflow/memory/` (personal), with a generated `MEMORY.md` index.
+- The fact catalog is pinned into the system prompt on **every** turn, so it
+  survives compaction; the facts most relevant to the current turn are recalled
+  in full automatically (you'll see a `recalled memory: …` line).
+- Secrets are redacted before a fact is written to disk.
+- Manage them with `#<text>` / `/memory add`, `/memory list`, and
+  `/memory forget <text>`.
 
 ## Burp Integration
 

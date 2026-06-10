@@ -39,6 +39,18 @@ const patterns: RegExp[] = [
   /\b(eyJ[A-Za-z0-9_-]{8,}\.)([A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?)\b/g,
   // Generic api_key / secret / password / token = value assignment.
   /((?:api[_-]?key|secret|password|passwd|token)\s*[:=]\s*["']?)([A-Za-z0-9._\-+/=]{16,})/gi,
+  // Credentials carried as URL/connection-string query parameters, e.g.
+  // `mongodb+srv://h/db?authSource=admin&password=hunter2` or `?auth=...&token=...`.
+  // The generic assignment above needs a 16+ char value; here we mask even a
+  // short query-param secret since the `&`/`#`/whitespace delimiter bounds it (E25).
+  /([?&](?:password|passwd|pwd|auth|token|api[_-]?key|access_token|secret)=)([^&#\s"']+)/gi,
+  // HTTP Digest auth: the `response=` field is the credential-derived hash; the
+  // 2-token Authorization pattern above only catches `Digest username=...`,
+  // leaving the response/nonce exposed (E25).
+  /(\bresponse=)("?[A-Fa-f0-9]{8,}"?)/g,
+  // GCP service-account JSON: the private_key body is caught by the PEM block
+  // below, but private_key_id (a key fingerprint) leaks separately (E25).
+  /(["']?private_key_id["']?\s*[:=]\s*["']?)([A-Za-z0-9]{16,})/gi,
   // Cookie headers.
   /((?:set-)?cookie:\s*)([^\r\n]+)/gi,
   // Common API key headers.

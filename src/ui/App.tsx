@@ -479,6 +479,41 @@ export function App({
       setHistoryIdx(null);
       historyDraft.current = '';
 
+      // `#text` quick-adds a durable memory fact (Claude-Code-style); `#!text`
+      // saves it to the personal scope instead of the project. The fact is in
+      // context on the very next turn — no agent round-trip.
+      if (agentValue.startsWith('#')) {
+        const personal = agentValue.startsWith('#!');
+        const text = agentValue.slice(personal ? 2 : 1).trim();
+        if (!text) {
+          dispatch({
+            type: 'append',
+            entry: {
+              kind: 'system',
+              text: 'usage: #<text to remember>  (or #!<text> for personal)',
+            },
+          });
+          return;
+        }
+        void agent
+          .addMemory({ text, scope: personal ? 'personal' : 'project' })
+          .then((fact) =>
+            dispatch({
+              type: 'append',
+              entry: fact
+                ? { kind: 'system', text: `remembered (${fact.scope}/${fact.type}): ${fact.name}` }
+                : { kind: 'error', text: 'memory not saved (empty after redaction or no store)' },
+            }),
+          )
+          .catch((err: unknown) =>
+            dispatch({
+              type: 'append',
+              entry: { kind: 'error', text: `memory save failed: ${String(err)}` },
+            }),
+          );
+        return;
+      }
+
       if (agentValue.startsWith('/')) {
         const handled = handleSlash(
           agent,
@@ -967,9 +1002,54 @@ function handleSlash(
         );
         return true;
       }
+      if (sub === 'add') {
+        const text = rest.slice(1).join(' ').trim();
+        if (!text) {
+          dispatch({
+            type: 'append',
+            entry: { kind: 'error', text: 'usage: /memory add <text>  (or use #<text>)' },
+          });
+          return true;
+        }
+        void agent
+          .addMemory({ text })
+          .then((fact) =>
+            dispatch({
+              type: 'append',
+              entry: fact
+                ? { kind: 'system', text: `remembered (${fact.scope}/${fact.type}): ${fact.name}` }
+                : { kind: 'error', text: 'memory not saved' },
+            }),
+          )
+          .catch((err: unknown) =>
+            dispatch({
+              type: 'append',
+              entry: { kind: 'error', text: `memory save failed: ${String(err)}` },
+            }),
+          );
+        return true;
+      }
+      if (sub === 'list') {
+        const facts = agent.listCuratedMemory();
+        dispatch({
+          type: 'append',
+          entry: {
+            kind: 'system',
+            text: facts.length
+              ? `Saved memory (${facts.length}):\n${facts.map((f) => `- [${f.type}] ${f.name} — ${f.description}`).join('\n')}`
+              : 'no saved memory yet — add one with #<text> or /memory add <text>',
+          },
+        });
+        return true;
+      }
+      // Default view: durable curated facts first, then the session checkpoint.
+      const facts = agent.listCuratedMemory();
+      const curated = facts.length
+        ? `Saved memory (${facts.length}):\n${facts.map((f) => `- [${f.type}] ${f.name} — ${f.description}`).join('\n')}`
+        : 'No saved memory yet. Add one with #<text> or /memory add <text>.';
       dispatch({
         type: 'append',
-        entry: { kind: 'system', text: agent.formatMemory() },
+        entry: { kind: 'system', text: `${curated}\n\n${agent.formatMemory()}` },
       });
       return true;
     }
@@ -1471,6 +1551,10 @@ const helpChalk = new Chalk({ level: chalkLevel() });
 
 const KEYBINDINGS: Array<{ keys: string; desc: string }> = [
   { keys: '@<file>', desc: 'inline a file into the next turn (Tab opens a picker)' },
+  {
+    keys: '#<text>',
+    desc: 'remember a durable fact (#!<text> = personal); recalled automatically',
+  },
   { keys: '/', desc: 'open the slash-command menu' },
   { keys: '↑ / ↓', desc: 'walk session prompt history (on first / last line of input)' },
   { keys: 'Ctrl-N / Ctrl-J', desc: 'insert a newline inside the input' },

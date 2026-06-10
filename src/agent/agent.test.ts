@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { IntelligenceStore } from '../intelligence/store.js';
 import type { Client } from '../llm/client.js';
 import type { ChatRequest, ChatResponse } from '../llm/types.js';
+import { MemoryStore } from '../memory/store.js';
 import { AlwaysAllow } from '../permission/permission.js';
 import { Store as SessionStore, newID as newSessionID } from '../session/store.js';
 import { Registry as SkillRegistry } from '../skills/registry.js';
@@ -1215,5 +1216,232 @@ describe('reconcileToolCalls (H6)', () => {
       { role: 'assistant' as const, content: 'hello' },
     ];
     expect(reconcileToolCalls(input)).toEqual(input);
+  });
+});
+
+// ---------- E1: parallel tool dispatch ----------
+
+/** A tool that blocks until `n` instances are running at once, proving the
+ *  agent dispatched them concurrently. If they ran sequentially the first
+ *  never sees a second arrive and falls through the timeout, returning
+ *  'serial' — a fast, deterministic failure rather than a hang. */
+class BarrierTool implements Tool {
+  private count = 0;
+  private waiters: Array<(ok: boolean) => void> = [];
+  constructor(private readonly need: number) {}
+  name(): string {
+    return 'barrier';
+  }
+  description(): string {
+    return 'barrier';
+  }
+  schema(): Record<string, unknown> {
+    return { type: 'object', properties: { id: { type: 'string' } } };
+  }
+  requiresPermission(): boolean {
+    return false;
+  }
+  async run(args: Record<string, unknown>): Promise<string> {
+    this.count += 1;
+    if (this.count >= this.need) {
+      for (const w of this.waiters) w(true);
+      this.waiters = [];
+      return `parallel-ok:${String(args.id ?? '')}`;
+    }
+    const ok = await new Promise<boolean>((resolve) => {
+      this.waiters.push(resolve);
+      setTimeout(() => resolve(false), 300);
+    });
+    return `${ok ? 'parallel-ok' : 'serial'}:${String(args.id ?? '')}`;
+  }
+}
+
+/** A tool that sleeps for `delay_ms` then echoes `id` — used to verify result
+ *  order is the call order, not the completion order. */
+class DelayTool implements Tool {
+  name(): string {
+    return 'delay';
+  }
+  description(): string {
+    return 'delay';
+  }
+  schema(): Record<string, unknown> {
+    return { type: 'object', properties: { id: { type: 'string' }, delay_ms: { type: 'number' } } };
+  }
+  requiresPermission(): boolean {
+    return false;
+  }
+  async run(args: Record<string, unknown>): Promise<string> {
+    await new Promise((r) => setTimeout(r, Number(args.delay_ms ?? 0)));
+    return `done:${String(args.id ?? '')}`;
+  }
+}
+
+function toolCall(id: string, name: string, args: Record<string, unknown>) {
+  return { id, type: 'function' as const, function: { name, arguments: JSON.stringify(args) } };
+}
+
+function agentWithTools(scripted: ChatResponse[], tools: Tool[]): Agent {
+  const reg = new ToolRegistry();
+  for (const t of tools) reg.register(t);
+  return new Agent({
+    client: new FakeClient(scripted),
+    tools: reg,
+    skills: new SkillRegistry(),
+    prompter: new AlwaysAllow(),
+    store: null,
+    target: new Target(),
+  });
+}
+
+describe('Agent parallel tool dispatch (E1)', () => {
+  it('runs independent tool calls in the same step concurrently', async () => {
+    const agent = agentWithTools(
+      [
+        {
+          message: {
+            role: 'assistant',
+            content: '',
+            toolCalls: [
+              toolCall('c1', 'barrier', { id: 'a' }),
+              toolCall('c2', 'barrier', { id: 'b' }),
+            ],
+          },
+          finishReason: 'tool_calls',
+        },
+        { message: { role: 'assistant', content: 'done' }, finishReason: 'stop' },
+      ],
+      [new BarrierTool(2)],
+    );
+    const { events, sink } = collect();
+    await agent.run('go', new AbortController().signal, sink);
+    const results = events
+      .filter((e) => e.type === 'tool-result')
+      .map((e) => (e.type === 'tool-result' ? e.result : ''));
+    // Both only resolve to parallel-ok if they were in flight simultaneously.
+    expect(results).toEqual(['parallel-ok:a', 'parallel-ok:b']);
+  });
+
+  it('emits tool results in call order even when later calls finish first', async () => {
+    const agent = agentWithTools(
+      [
+        {
+          message: {
+            role: 'assistant',
+            content: '',
+            toolCalls: [
+              toolCall('c1', 'delay', { id: 'first', delay_ms: 60 }),
+              toolCall('c2', 'delay', { id: 'second', delay_ms: 0 }),
+            ],
+          },
+          finishReason: 'tool_calls',
+        },
+        { message: { role: 'assistant', content: 'done' }, finishReason: 'stop' },
+      ],
+      [new DelayTool()],
+    );
+    const { events, sink } = collect();
+    await agent.run('go', new AbortController().signal, sink);
+    const order = events
+      .filter((e) => e.type === 'tool-result')
+      .map((e) => (e.type === 'tool-result' ? e.result : ''));
+    // 'second' finishes first, but results are recorded in call order.
+    expect(order).toEqual(['done:first', 'done:second']);
+    // History keeps the same order: assistant, tool(first), tool(second).
+    const toolMsgs = agent.getHistory().filter((m) => m.role === 'tool');
+    expect(toolMsgs.map((m) => m.toolCallID)).toEqual(['c1', 'c2']);
+  });
+});
+
+// ---------- Curated memory: pinned catalog + recall + survives compaction ----------
+
+describe('Agent curated memory', () => {
+  function makeMemoryAgent(scripted: ChatResponse[]) {
+    const cwd = mkdtempSync(join(tmpdir(), 'pf-agent-mem-cwd-'));
+    const home = mkdtempSync(join(tmpdir(), 'pf-agent-mem-home-'));
+    const memoryStore = new MemoryStore({ cwd, home });
+    const tools = new ToolRegistry();
+    tools.register(new EchoTool());
+    const agent = new Agent({
+      client: new FakeClient(scripted),
+      tools,
+      skills: new SkillRegistry(),
+      prompter: new AlwaysAllow(),
+      store: null,
+      target: new Target(),
+      memoryStore,
+    });
+    return {
+      agent,
+      memoryStore,
+      cleanup: () => {
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      },
+    };
+  }
+
+  it('pins a saved fact into the system prompt immediately (next turn)', async () => {
+    const { agent, cleanup } = makeMemoryAgent([]);
+    try {
+      const fact = await agent.addMemory({ text: 'orders API IDOR on /api/orders/{id}' });
+      expect(fact).not.toBeNull();
+      const sys = agent.getHistory()[0]?.content ?? '';
+      expect(sys).toContain('Saved memory');
+      expect(sys).toContain(fact?.name ?? 'NOPE');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('recalls a relevant fact into the turn and emits a memory-recall event', async () => {
+    const { agent, cleanup } = makeMemoryAgent([
+      { message: { role: 'assistant', content: 'ok' }, finishReason: 'stop' },
+    ]);
+    try {
+      await agent.addMemory({ text: 'orders API IDOR via sequential id on /api/orders/{id}' });
+      const { events, sink } = collect();
+      await agent.run('test the orders endpoint for idor', new AbortController().signal, sink);
+      const recall = events.find((e) => e.type === 'memory-recall');
+      expect(recall && recall.type === 'memory-recall' ? recall.names.length : 0).toBeGreaterThan(
+        0,
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('keeps the saved-memory catalog in the prompt after a compaction', async () => {
+    // compact() resets history to [system, summary]; the catalog must still be
+    // present in the rebuilt system prompt so the model never "forgets" it.
+    const { agent, cleanup } = makeMemoryAgent([
+      { message: { role: 'assistant', content: 'COMPACTED SUMMARY' }, finishReason: 'stop' },
+    ]);
+    try {
+      const fact = await agent.addMemory({ text: 'login OAuth redirect_uri bypass works' });
+      // Seed a couple of turns of history so there is something to compact.
+      agent.getHistory(); // no-op accessor
+      await agent.compact(new AbortController().signal, () => {});
+      const sys = agent.getHistory()[0]?.content ?? '';
+      expect(sys).toContain('Saved memory');
+      expect(sys).toContain(fact?.name ?? 'NOPE');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('forgetMemory removes a curated fact and drops it from the prompt', async () => {
+    const { agent, cleanup } = makeMemoryAgent([]);
+    try {
+      const fact = await agent.addMemory({ text: 'orders API IDOR on /api/orders/{id}' });
+      const name = fact?.name ?? 'NOPE';
+      expect(agent.listCuratedMemory()).toHaveLength(1);
+      const removed = await agent.forgetMemory('orders');
+      expect(removed).toContain(name);
+      expect(agent.listCuratedMemory()).toHaveLength(0);
+      expect(agent.getHistory()[0]?.content ?? '').not.toContain(name);
+    } finally {
+      cleanup();
+    }
   });
 });

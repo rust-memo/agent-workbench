@@ -14,6 +14,8 @@ export class BackendError extends Error {
   readonly category: ErrorCategory;
   readonly statusCode: number;
   readonly detail: string;
+  /** Server-advised wait before retrying (from a Retry-After header), in ms. */
+  retryAfterMs?: number;
 
   constructor(backend: string, category: ErrorCategory, statusCode: number, detail: string) {
     const msg =
@@ -25,6 +27,35 @@ export class BackendError extends Error {
     this.statusCode = statusCode;
     this.detail = detail;
   }
+}
+
+/**
+ * True for errors worth retrying with backoff: rate limits (429) and transient
+ * upstream failures (502/503/504), plus a `backend-down` transport error (the
+ * daemon may be mid-restart). A plain 500 is treated as deterministic and NOT
+ * retried, since it usually reflects a bad request rather than a blip.
+ */
+export function isTransient(err: unknown): boolean {
+  if (!(err instanceof BackendError)) return false;
+  if (err.category === 'backend-down') return true;
+  return err.statusCode === 429 || [502, 503, 504].includes(err.statusCode);
+}
+
+/**
+ * Parse a Retry-After header (delta-seconds or an HTTP-date) into ms relative to
+ * `now`. Returns undefined when absent/unparseable so the caller falls back to
+ * its own backoff schedule. `now` is injectable for deterministic tests.
+ */
+export function parseRetryAfter(
+  header: string | null | undefined,
+  now = Date.now(),
+): number | undefined {
+  if (!header) return undefined;
+  const trimmed = header.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  const when = Date.parse(trimmed);
+  if (Number.isNaN(when)) return undefined;
+  return Math.max(0, when - now);
 }
 
 /**

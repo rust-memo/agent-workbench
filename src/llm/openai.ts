@@ -7,10 +7,19 @@
 // server omits one.
 
 import type { Client, Pinger, StreamingClient } from './client.js';
-import { classifyBackend } from './errors.js';
+import { type BackendError, classifyBackend, parseRetryAfter } from './errors.js';
 import { newCallID } from './ids.js';
 import { kimiLocksTemperature, kimiSupportsThinkingToggle } from './providers.js';
+import { withRetry } from './retry.js';
 import type { ChatRequest, ChatResponse, Message, ToolCall } from './types.js';
+
+/** Annotate a backend error with the server's Retry-After so withRetry can
+ *  honor it instead of its computed backoff. */
+function withRetryAfter(err: BackendError, resp: Response): BackendError {
+  const ms = parseRetryAfter(resp.headers.get('retry-after'));
+  if (ms !== undefined) err.retryAfterMs = ms;
+  return err;
+}
 
 interface OAIToolCallFragment {
   index: number;
@@ -134,6 +143,13 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
   }
 
   async chat(req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
+    // Retry rate limits / transient 5xx with backoff (E7). The non-streaming
+    // call has no observable side effects before it returns, so it's safe to
+    // re-run wholesale.
+    return withRetry(() => this.chatOnce(req, signal), { signal });
+  }
+
+  private async chatOnce(req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
     const body = this.encodeRequest(req, false);
     const combinedSignal = withTimeout(signal, CHAT_TIMEOUT_MS);
     let resp: Response;
@@ -149,7 +165,7 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
     }
     const raw = await resp.text();
     if (resp.status !== 200) {
-      throw classifyBackend(this.label, null, resp.status, raw);
+      throw withRetryAfter(classifyBackend(this.label, null, resp.status, raw), resp);
     }
     let out: OAIChatResp;
     try {
@@ -192,23 +208,10 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
     onDelta: (delta: string) => void,
     signal?: AbortSignal,
   ): Promise<ChatResponse> {
-    const body = this.encodeRequest(req, true);
-    const combinedSignal = withTimeout(signal, CHAT_TIMEOUT_MS);
-    let resp: Response;
-    try {
-      resp = await fetch(`${this.baseURL}/chat/completions`, {
-        method: 'POST',
-        headers: { ...this.headers(), Accept: 'text/event-stream' },
-        body: JSON.stringify(body),
-        signal: combinedSignal,
-      });
-    } catch (err) {
-      throw classifyBackend(this.label, err, 0, undefined);
-    }
-    if (resp.status !== 200) {
-      const raw = await resp.text();
-      throw classifyBackend(this.label, null, resp.status, raw);
-    }
+    // Retry only the connection setup (E7): a transient 429/5xx surfaces before
+    // any delta is emitted, so re-running openStream can't double-emit tokens.
+    // Once the 200 stream is flowing, a mid-stream failure is NOT retried.
+    const resp = await withRetry(() => this.openStream(req, signal), { signal });
     if (!resp.body) {
       throw new Error(`${this.label}: empty stream body`);
     }
@@ -296,6 +299,30 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
       });
     }
     return { message: msg, finishReason: finish };
+  }
+
+  /** Open the SSE stream and return the live 200 response, or throw a
+   *  (retry-annotated) BackendError. Extracted so withRetry can re-attempt the
+   *  connection without re-entering the consume loop. */
+  private async openStream(req: ChatRequest, signal?: AbortSignal): Promise<Response> {
+    const body = this.encodeRequest(req, true);
+    const combinedSignal = withTimeout(signal, CHAT_TIMEOUT_MS);
+    let resp: Response;
+    try {
+      resp = await fetch(`${this.baseURL}/chat/completions`, {
+        method: 'POST',
+        headers: { ...this.headers(), Accept: 'text/event-stream' },
+        body: JSON.stringify(body),
+        signal: combinedSignal,
+      });
+    } catch (err) {
+      throw classifyBackend(this.label, err, 0, undefined);
+    }
+    if (resp.status !== 200) {
+      const raw = await resp.text();
+      throw withRetryAfter(classifyBackend(this.label, null, resp.status, raw), resp);
+    }
+    return resp;
   }
 
   private headers(): Record<string, string> {

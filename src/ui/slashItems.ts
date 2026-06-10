@@ -19,8 +19,8 @@ export const SLASH_ITEMS: SlashItem[] = [
   { name: '/compact', description: 'summarize conversation into persistent session memory' },
   {
     name: '/memory',
-    args: '[clear|forget <text>]',
-    description: 'show session memory; clear wipes it, forget drops matching items',
+    args: '[add <text>|list|forget <text>|clear]',
+    description: 'saved + session memory; add/list curated facts (or #<text>), forget/clear',
   },
   { name: '/snapshot', description: 'write the current redacted context snapshot now' },
   { name: '/burp', args: '[port]', description: 'start the local Burp/PentesterFlow listener' },

@@ -34,6 +34,7 @@ import {
 } from '../llm/providers.js';
 import * as logger from '../logger/logger.js';
 import { createSessionDebugLog } from '../logger/sessionDebug.js';
+import { MemoryStore } from '../memory/store.js';
 import { YoloPrompter } from '../permission/permission.js';
 import * as sessionStore from '../session/store.js';
 import { skillSearchDirs } from '../skills/discovery.js';
@@ -363,6 +364,10 @@ async function main(): Promise<number> {
   // agent has tried. Persists alongside findings so resumes keep state.
   const coverageStore = new CoverageStore(`findings/coverage-${sessionID}.json`);
   const intelligenceStore = new IntelligenceStore();
+  // Curated, human-editable memory (Claude-Code-style facts). Its catalog is
+  // pinned into the system prompt and matching facts recalled each turn, so a
+  // `#`-saved fact stays in context for the rest of the session and beyond.
+  const memoryStore = new MemoryStore();
   // Operator-authored engagement notes (scope/rules/creds). Read once at
   // startup from project + home .pentesterflow/engagement.md; always injected
   // into the system prompt so it survives compaction unconditionally.
@@ -522,6 +527,7 @@ async function main(): Promise<number> {
     toolingProfile: cfg.tooling_profile,
     promptProfile: effectivePromptProfile(cfg),
     intelligence: intelligenceStore,
+    memoryStore,
     engagement,
     // --no-stream takes precedence over the config default so users can
     // toggle off streaming for a single launch without rewriting config.

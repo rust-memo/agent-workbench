@@ -4,6 +4,42 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Saved memory (`#` quick-add)** — a curated, human-readable memory layer
+  modeled on Claude Code. `#<text>` saves a durable fact (one Markdown file per
+  fact with frontmatter, under `.pentesterflow/memory/`); `#!<text>` saves it to
+  the personal scope. The fact catalog is pinned into the system prompt every
+  turn (survives compaction) and the most relevant facts are recalled in full
+  per turn, surfaced as a `recalled memory: …` line. Manage with
+  `/memory add|list|forget`. Secrets are redacted before write.
+- **Parallel tool dispatch** — independent tool calls in one step now run
+  concurrently (bounded fan-out) with results recorded in call order; recon
+  fan-outs finish in ~max(latency) instead of the sum. Single-call and
+  `load_skill` steps stay sequential. The permission prompter serializes its
+  modal so approvals still appear one at a time.
+- **LLM retry/backoff** — transient backend failures (HTTP 429 / 502 / 503 /
+  504 and connection drops) are retried with exponential backoff, honoring a
+  `Retry-After` header. Applied to the OpenAI-compatible client (Kimi, Groq,
+  OpenRouter, DeepSeek, LM Studio).
+
+### Changed
+
+- **Self-update hardening** — a pinned `pentesterflow update <version>` now
+  fetches the installer from that release tag (immutable) instead of `main`, and
+  the installer URL is asserted to be https on `raw.githubusercontent.com`
+  before fetch.
+
+### Fixed
+
+- **Redaction gaps** — connection-string query-param credentials
+  (`?password=` / `&auth=` / `&access_token=`), HTTP Digest `response=` hashes,
+  and GCP service-account `private_key_id` are now masked.
+- Closed out the internal code audit: 35 of 39 findings fixed, 3 accepted as
+  intentional, 1 hardened (see `AUDIT.md`).
+
 ## [0.2.0] - 2026-06-06
 
 Hardening, model tuning, and a transcript/status overhaul, plus Claude

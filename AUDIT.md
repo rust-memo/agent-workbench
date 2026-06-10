@@ -14,6 +14,28 @@ Severity legend: **HIGH** = security bypass / RCE primitive / crash / silent dat
 
 ---
 
+## Remediation status (verified against source)
+
+> Updated 2026-06-10. Each finding below was re-checked against the current tree; fixes carry an
+> inline comment citing their finding ID, and the full suite is green (`tsc --noEmit` clean, 561
+> tests passing). **35 of 39 findings are fixed.** The remaining 4 are accepted decisions, not open
+> defects.
+
+- **Fixed (35):** H1, H3, H4, H5, H6, H7, H8, H9, H10 · M1–M14 (all) · L1, L2, L3, L4, L5, L7, L8,
+  L11, L12, L13, L14, L15.
+- **Accepted — won't change (3):**
+  - **H2** (DNS-rebinding SSRF) — keep permissive; reaching internal/metadata IPs is often the
+    engagement goal. See the 🟡 row in the triage table.
+  - **L9** (debug log writes unredacted tool I/O) — opt-in, `0o600`, local-only; the operator's
+    explicit choice. See the ⛔ row.
+  - **L6** (no generic high-entropy redaction fallback) — inherent to label-anchored redaction.
+- **Hardened (1):** **L10** — self-update now pins the installer to the requested release tag
+  (immutable ref) instead of mutable `main` for versioned updates, and asserts the script URL is
+  https on `raw.githubusercontent.com` before fetch. The downloaded binary was already SHA-256
+  verified fail-closed by `install.sh`. (`src/update/selfUpdate.ts`)
+
+---
+
 ## Capability-impact triage — "fix without limiting the operator"
 
 PentesterFlow's mission is to help authorized pentesters/bug-hunters/security-engineers work

@@ -27,10 +27,18 @@ export async function runSelfUpdate(version = 'latest'): Promise<UpdateResult> {
     ...(installDir ? { PENTESTERFLOW_INSTALL_DIR: installDir } : {}),
   };
 
+  // Pin the installer to the requested release tag (immutable git ref) instead
+  // of the mutable `main` branch whenever a concrete version is given, so
+  // `/update v0.2.0` runs exactly the installer that shipped with that tag —
+  // auditable and unchanging — rather than whatever currently sits on main
+  // (L10). `latest` has no tag to pin to, so it still tracks main; the binary
+  // it pulls is SHA-256 verified fail-closed by install.sh regardless.
+  const ref = normalizedVersion === 'latest' ? 'main' : normalizedVersion;
+
   const output =
     process.platform === 'win32'
-      ? await runWindowsInstaller(repo, env)
-      : await runUnixInstaller(repo, env);
+      ? await runWindowsInstaller(repo, ref, env)
+      : await runUnixInstaller(repo, ref, env);
 
   return {
     version: normalizedVersion,
@@ -52,8 +60,12 @@ function detectInstallDir(): string | undefined {
   return undefined;
 }
 
-async function runUnixInstaller(repo: string, env: NodeJS.ProcessEnv): Promise<string> {
-  const scriptURL = `https://raw.githubusercontent.com/${repo}/main/install.sh`;
+async function runUnixInstaller(
+  repo: string,
+  ref: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const scriptURL = `https://raw.githubusercontent.com/${repo}/${ref}/install.sh`;
   const script = await fetchText(scriptURL);
   const dir = await mkdtemp(join(tmpdir(), 'pentesterflow-update-'));
   const file = join(dir, 'install.sh');
@@ -71,8 +83,12 @@ async function runUnixInstaller(repo: string, env: NodeJS.ProcessEnv): Promise<s
   }
 }
 
-async function runWindowsInstaller(repo: string, env: NodeJS.ProcessEnv): Promise<string> {
-  const scriptURL = `https://raw.githubusercontent.com/${repo}/main/install.ps1`;
+async function runWindowsInstaller(
+  repo: string,
+  ref: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const scriptURL = `https://raw.githubusercontent.com/${repo}/${ref}/install.ps1`;
   const command = [
     '$ErrorActionPreference = "Stop"',
     '$ProgressPreference = "SilentlyContinue"',
@@ -93,7 +109,29 @@ async function runWindowsInstaller(repo: string, env: NodeJS.ProcessEnv): Promis
   return joinOutput(stdout, stderr);
 }
 
+/**
+ * Reject an installer URL that isn't https on the expected githubusercontent
+ * host. The script is fetched then executed, so a tampered PENTESTERFLOW_REPO
+ * must not be able to redirect the fetch to an attacker scheme/host (L10). TLS
+ * guards the bytes in flight; this guards the destination.
+ */
+export function assertInstallerURL(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`invalid installer URL: ${url}`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`refusing to fetch installer over non-https URL: ${url}`);
+  }
+  if (parsed.hostname !== 'raw.githubusercontent.com') {
+    throw new Error(`refusing to fetch installer from unexpected host: ${parsed.hostname}`);
+  }
+}
+
 async function fetchText(url: string): Promise<string> {
+  assertInstallerURL(url);
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`download failed: ${url} (${resp.status})`);
   return await resp.text();

@@ -310,6 +310,12 @@ export interface BuildOptions {
    * injected — transcript-independent, so it survives compaction unconditionally.
    */
   engagement?: string;
+  /**
+   * Curated-memory catalog (names + descriptions from MemoryStore.index()).
+   * Always injected so the model knows which durable facts exist on every turn,
+   * surviving compaction; the full facts arrive via per-turn relevance recall.
+   */
+  curatedMemory?: string;
 }
 
 export function buildSystemPrompt(opts: BuildOptions): string {
@@ -351,6 +357,7 @@ export function buildSystemPrompt(opts: BuildOptions): string {
   }
 
   sb += renderEngagement(opts.engagement);
+  sb += renderCuratedMemory(opts.curatedMemory);
   sb += renderMemory(opts.memory);
 
   // Advertise only the skills the user has left enabled AND which allow
@@ -381,6 +388,19 @@ function renderEngagement(engagement: string | undefined): string {
   const text = engagement?.trim();
   if (!text) return '';
   return `\n# Engagement notes (operator-authored — authoritative, follow over inferred context)\n${text}\n`;
+}
+
+/**
+ * Render the curated-memory catalog: the names + one-line descriptions of every
+ * durable fact the operator saved (via `#` quick-add or /memory add). It rides
+ * in the system prompt on every request so the model always knows what it can
+ * recall, even right after a compaction. The full text of a relevant fact is
+ * injected separately each turn by the agent's relevance recall.
+ */
+function renderCuratedMemory(catalog: string | undefined): string {
+  const text = catalog?.trim();
+  if (!text) return '';
+  return `\n# Saved memory (durable — recalled by relevance each turn)\nThese facts persist across this and future sessions. The matching ones are expanded into the turn automatically; ask to recall any by name.\n${text}\n`;
 }
 
 /**

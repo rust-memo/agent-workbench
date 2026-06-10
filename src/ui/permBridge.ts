@@ -15,6 +15,13 @@ export type PermissionPublisher = (req: PermissionRequest | null) => void;
 export class BridgedPrompter implements Prompter {
   private publish: PermissionPublisher;
   private sessionAllowed = new Set<string>();
+  // Single-modal lock. The TUI can only show one permission modal at a time, so
+  // concurrent ask() calls (e.g. parallel tool dispatch) must be serialized —
+  // otherwise the second publish() clobbers the first request in app state. The
+  // lock is handed off directly to the next waiter (busy is never cleared while
+  // a waiter exists) so a freshly-arriving ask can't slip in between.
+  private busy = false;
+  private waiters: Array<() => void> = [];
 
   constructor(publish: PermissionPublisher) {
     this.publish = publish;
@@ -37,6 +44,31 @@ export class BridgedPrompter implements Prompter {
     // the cache (L13 — defuses a latent bypass even though key spaces don't
     // currently collide).
     if (!req.noSessionCache && this.sessionAllowed.has(this.keyFor(req))) return 'allow-once';
+    // Acquire the single-modal lock. If idle we take it synchronously (so the
+    // first publish stays on the caller's stack); otherwise we park until the
+    // in-flight prompt hands the lock off to us.
+    if (this.busy) {
+      await new Promise<void>((resolve) => this.waiters.push(resolve));
+    } else {
+      this.busy = true;
+    }
+    try {
+      // Re-check the cache now that we hold the lock: in a parallel fan-out to
+      // one origin, several asks miss the cache before any resolves and queue
+      // here. The first "allow session" populates the cache while the rest wait,
+      // so the queued ones ride that approval instead of each re-opening an
+      // identical modal.
+      if (!req.noSessionCache && this.sessionAllowed.has(this.keyFor(req))) return 'allow-once';
+      return await this.askOnce(req, signal);
+    } finally {
+      const next = this.waiters.shift();
+      if (next)
+        next(); // hand the lock to the next waiter; busy stays true
+      else this.busy = false;
+    }
+  }
+
+  private askOnce(req: Request, signal?: AbortSignal): Promise<Decision> {
     return new Promise<Decision>((resolve, reject) => {
       if (signal?.aborted) {
         reject(new Error('aborted'));

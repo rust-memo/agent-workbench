@@ -6,9 +6,15 @@
 import { type IntelligenceStore, formatIntelligenceContext } from '../intelligence/store.js';
 import type { Client, StreamingClient } from '../llm/client.js';
 import { isStreaming } from '../llm/client.js';
-import type { ChatRequest, Message } from '../llm/types.js';
+import type { ChatRequest, Message, ToolCall } from '../llm/types.js';
 import { parsedArgs } from '../llm/types.js';
 import { error as logError } from '../logger/logger.js';
+import {
+  type AddMemoryInput,
+  type MemoryFact,
+  type MemoryStore,
+  formatMemoryRecall,
+} from '../memory/store.js';
 import type { Prompter } from '../permission/permission.js';
 import { redact } from '../redact/index.js';
 import type { SessionMemory, Store } from '../session/store.js';
@@ -54,6 +60,9 @@ export interface AgentOptions {
   streamingEnabled?: boolean;
   /** Local scan-intelligence dataset used to improve coverage across sessions. */
   intelligence?: IntelligenceStore | null;
+  /** Curated, human-editable memory (Claude-Code-style facts). Its catalog is
+   *  pinned into the system prompt and matching facts are recalled each turn. */
+  memoryStore?: MemoryStore | null;
   /** Operator-authored engagement notes (from .pentesterflow/engagement.md),
    *  always injected into the system prompt. Loaded once at startup. */
   engagement?: string;
@@ -64,6 +73,56 @@ export interface AgentOptions {
  *  want to retry it on every turn. */
 const MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3;
 const COMPACTION_INPUT_CHAR_LIMIT = 22_000;
+// When the model emits several independent tool calls in one step, run them
+// concurrently up to this fan-out instead of strictly one-at-a-time — recon
+// fan-outs (multiple curl/grep probes) finish in ~max(latency) rather than the
+// sum (E1). The permission prompter serializes its modal internally, so
+// approvals still appear one at a time.
+const MAX_PARALLEL_TOOL_CALLS = 4;
+// Tools whose execution mutates agent state that a later call in the SAME step
+// can observe (load_skill changes the active-skill allowlist used by the
+// allowed-tools gate). A step containing one of these falls back to sequential
+// execution so ordering stays deterministic.
+const STATEFUL_TOOLS = new Set(['load_skill']);
+
+interface ParsedToolCall {
+  args: Record<string, unknown>;
+  argsJSON: string;
+  parseErr?: Error;
+}
+
+interface ToolCallResult {
+  result: string;
+  errStr: string;
+  durationMs: number;
+}
+
+/**
+ * Map `items` through `fn` with at most `limit` running at once, returning
+ * results in input order. `fn` is expected not to reject (callers fold errors
+ * into their result value); an unexpected rejection still propagates.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = next;
+      next += 1;
+      if (i >= items.length) return;
+      const item = items[i];
+      if (item === undefined) continue;
+      results[i] = await fn(item, i);
+    }
+  };
+  const pool = Array.from({ length: Math.min(limit, items.length) }, worker);
+  await Promise.all(pool);
+  return results;
+}
 // Upper bound on retained items per memory list, so a long engagement can't
 // grow the persisted checkpoint (and its disk footprint) without limit. The
 // most recent items win; dedup happens in mergeList. Lists default to a much
@@ -81,6 +140,7 @@ export class Agent {
   readonly store: Store | null;
   readonly target: Target;
   readonly intelligence: IntelligenceStore | null;
+  readonly memoryStore: MemoryStore | null;
 
   private thinking: boolean;
   private maxSteps: number;
@@ -116,6 +176,7 @@ export class Agent {
     this.prompter = opts.prompter;
     this.store = opts.store ?? null;
     this.intelligence = opts.intelligence ?? null;
+    this.memoryStore = opts.memoryStore ?? null;
     this.target = opts.target;
     this.thinking = opts.thinkingEnabled ?? false;
     this.maxSteps = opts.maxSteps && opts.maxSteps > 0 ? opts.maxSteps : 20;
@@ -132,6 +193,7 @@ export class Agent {
       promptProfile: this.promptProfile,
       memory: this.memory,
       engagement: this.engagement,
+      curatedMemory: this.memoryStore?.index() ?? '',
     });
     this.history = [{ role: 'system', content: this.sysPrompt }];
   }
@@ -197,34 +259,39 @@ export class Agent {
   }
 
   /**
-   * Remove individual memory items whose text contains `query`
-   * (case-insensitive) across every list, so a single wrong line can be
-   * dropped without nuking the whole checkpoint. Returns the removed items.
+   * Remove memory whose text contains `query` (case-insensitive) — both durable
+   * curated facts and individual session-checkpoint items — so a single wrong
+   * line can be dropped without nuking everything. Returns the removed entries.
    */
   async forgetMemory(query: string): Promise<string[]> {
     const needle = query.trim().toLowerCase();
-    if (!needle || !this.memory) return [];
+    if (!needle) return [];
     const removed: string[] = [];
-    const prune = (items: string[]): string[] =>
-      items.filter((item) => {
-        if (item.toLowerCase().includes(needle)) {
-          removed.push(item);
-          return false;
-        }
-        return true;
-      });
-    this.memory = {
-      ...this.memory,
-      objectives: prune(this.memory.objectives),
-      plan: prune(this.memory.plan),
-      completed: prune(this.memory.completed),
-      findings: prune(this.memory.findings),
-      tested: prune(this.memory.tested),
-      files: prune(this.memory.files),
-      commands: prune(this.memory.commands),
-      credentials: prune(this.memory.credentials),
-      todos: prune(this.memory.todos),
-    };
+    // Durable curated facts (deletes the backing files + rebuilds the index).
+    if (this.memoryStore) removed.push(...this.memoryStore.forget(query));
+    // Session checkpoint items.
+    if (this.memory) {
+      const prune = (items: string[]): string[] =>
+        items.filter((item) => {
+          if (item.toLowerCase().includes(needle)) {
+            removed.push(item);
+            return false;
+          }
+          return true;
+        });
+      this.memory = {
+        ...this.memory,
+        objectives: prune(this.memory.objectives),
+        plan: prune(this.memory.plan),
+        completed: prune(this.memory.completed),
+        findings: prune(this.memory.findings),
+        tested: prune(this.memory.tested),
+        files: prune(this.memory.files),
+        commands: prune(this.memory.commands),
+        credentials: prune(this.memory.credentials),
+        todos: prune(this.memory.todos),
+      };
+    }
     if (removed.length === 0) return [];
     this.rebuildSystemPrompt();
     this.history = ensureSystemPrompt(this.history, this.sysPrompt);
@@ -652,6 +719,14 @@ export class Agent {
     if (intelligenceContext && last) {
       working.splice(working.length - 1, 0, { role: 'system', content: intelligenceContext });
     }
+    // Recall the durable curated facts most relevant to this turn and inject
+    // their full text just before the user message, so they stay in context
+    // even after a compaction has scrubbed the transcript (the catalog of names
+    // is already pinned in the system prompt; this brings in the bodies).
+    const recall = this.recallCuratedMemory(userMsg, emit);
+    if (recall && last) {
+      working.splice(working.length - 1, 0, { role: 'system', content: recall });
+    }
     if (last) last.content = expandedUserMsg;
 
     const maxSteps = this.maxSteps;
@@ -690,90 +765,173 @@ export class Agent {
         return;
       }
 
+      await this.executeToolCalls(toolCalls, signal, emit, working);
+    }
+    emit({ type: 'error', err: new MaxStepsError(maxSteps) });
+  }
+
+  /**
+   * Run the step's tool calls. A single call, or any step containing a
+   * state-mutating tool (load_skill), runs sequentially with the original
+   * interleaved tool-call/tool-result emit order and per-call save. Multiple
+   * independent calls run with bounded concurrency (E1): all tool-call events
+   * are emitted in order, the calls execute concurrently, then results are
+   * emitted and tool messages recorded in the original order so the
+   * transcript and the provider's tool_call→result pairing stay deterministic
+   * regardless of completion order.
+   */
+  private async executeToolCalls(
+    toolCalls: ToolCall[],
+    signal: AbortSignal,
+    emit: EventSink,
+    working: Message[],
+  ): Promise<void> {
+    const sequential =
+      toolCalls.length <= 1 || toolCalls.some((tc) => STATEFUL_TOOLS.has(tc.function.name));
+
+    if (sequential) {
       for (const tc of toolCalls) {
         if (signal.aborted) throw new Error('aborted');
-        let args: Record<string, unknown> = {};
-        let parseErr: Error | undefined;
-        try {
-          args = parsedArgs(tc.function);
-        } catch (err) {
-          parseErr = err instanceof Error ? err : new Error(String(err));
-        }
-        const argsJSON = tc.function.arguments;
+        const parsed = this.parseToolCall(tc);
         emit({
           type: 'tool-call',
           id: tc.id,
           name: tc.function.name,
-          args,
-          argsJSON,
+          args: parsed.args,
+          argsJSON: parsed.argsJSON,
         });
-
-        const start = Date.now();
-        let result = '';
-        let runErr: Error | undefined;
-        if (parseErr) {
-          runErr = new Error(`could not parse arguments: ${parseErr.message} (raw: ${argsJSON})`);
-        } else {
-          // Enforce the active skills' allowed-tools union before
-          // dispatch. Soft-fail (set runErr) instead of throwing so the
-          // model sees the error as a tool result and can self-correct
-          // — usually by loading a different skill or by giving up on
-          // the disallowed action. Workflow tools (load_skill,
-          // coverage, read_*, ask, finding, browser_capture_*) are
-          // always allowed regardless of which skill is active.
-          const allowed = this.isToolAllowed(tc.function.name);
-          if (!allowed.ok) {
-            runErr = new Error(allowed.reason ?? 'tool blocked by active skills');
-          } else {
-            try {
-              result = await this.tools.execute(tc.function.name, args, signal, this.prompter);
-            } catch (err) {
-              runErr = err instanceof Error ? err : new Error(String(err));
-            }
-          }
-        }
-        const durationMs = Date.now() - start;
-        let errStr = '';
-        if (runErr) {
-          errStr = runErr.message;
-          result = `ERROR: ${errStr}`;
-          logError('agent: tool failed', {
-            tool: tc.function.name,
-            duration_ms: durationMs,
-            err: errStr,
-          });
-        }
-        emit({
-          type: 'tool-result',
-          id: tc.id,
-          name: tc.function.name,
-          result,
-          err: errStr,
-          durationMs,
-        });
-
-        if (tc.function.name === 'load_skill' && !runErr) {
-          const nm = typeof args.name === 'string' ? args.name : '';
-          if (nm) {
-            this.activeSkills.add(nm);
-            emit({ type: 'skill-active', name: nm });
-          }
-        }
-
-        const toolMsg: Message = {
-          role: 'tool',
-          content: result,
-          toolCallID: tc.id,
-          name: tc.function.name,
-        };
-        this.history.push(toolMsg);
-        working.push(toolMsg);
+        const res = await this.runParsedToolCall(tc, parsed, signal);
+        this.recordToolResult(tc, parsed, res, emit, working);
         await this.save().catch((err) =>
           emit({ type: 'error', err: new Error(`save session: ${errMessage(err)}`) }),
         );
       }
+      return;
     }
-    emit({ type: 'error', err: new MaxStepsError(maxSteps) });
+
+    const parsedAll = toolCalls.map((tc) => this.parseToolCall(tc));
+    toolCalls.forEach((tc, i) => {
+      const parsed = parsedAll[i];
+      if (parsed) {
+        emit({
+          type: 'tool-call',
+          id: tc.id,
+          name: tc.function.name,
+          args: parsed.args,
+          argsJSON: parsed.argsJSON,
+        });
+      }
+    });
+    const results = await mapWithConcurrency(toolCalls, MAX_PARALLEL_TOOL_CALLS, (tc, i) =>
+      this.runParsedToolCall(tc, parsedAll[i] ?? this.parseToolCall(tc), signal),
+    );
+    toolCalls.forEach((tc, i) => {
+      const parsed = parsedAll[i];
+      const res = results[i];
+      if (parsed && res) this.recordToolResult(tc, parsed, res, emit, working);
+    });
+    // One save covers the whole batch — every tool message is appended above.
+    await this.save().catch((err) =>
+      emit({ type: 'error', err: new Error(`save session: ${errMessage(err)}`) }),
+    );
+    if (signal.aborted) throw new Error('aborted');
+  }
+
+  /** Parse a tool call's JSON arguments, capturing (not throwing) a parse error
+   *  so the model sees it as a tool result and can self-correct. */
+  private parseToolCall(tc: ToolCall): ParsedToolCall {
+    let args: Record<string, unknown> = {};
+    let parseErr: Error | undefined;
+    try {
+      args = parsedArgs(tc.function);
+    } catch (err) {
+      parseErr = err instanceof Error ? err : new Error(String(err));
+    }
+    return { args, argsJSON: tc.function.arguments, parseErr };
+  }
+
+  /** Dispatch one parsed tool call (allowed-tools gate + permission-gated
+   *  execute). Never throws — failures come back as an error result string so
+   *  the call can run inside a concurrency pool without rejecting its peers. */
+  private async runParsedToolCall(
+    tc: ToolCall,
+    parsed: ParsedToolCall,
+    signal: AbortSignal,
+  ): Promise<ToolCallResult> {
+    if (signal.aborted) return { result: 'ERROR: aborted', errStr: 'aborted', durationMs: 0 };
+    const start = Date.now();
+    let result = '';
+    let runErr: Error | undefined;
+    if (parsed.parseErr) {
+      runErr = new Error(
+        `could not parse arguments: ${parsed.parseErr.message} (raw: ${parsed.argsJSON})`,
+      );
+    } else {
+      // Enforce the active skills' allowed-tools union before dispatch.
+      // Soft-fail (set runErr) instead of throwing so the model sees the error
+      // as a tool result and can self-correct — usually by loading a different
+      // skill or giving up on the disallowed action. Workflow tools
+      // (load_skill, coverage, read_*, ask, finding, browser_capture_*) are
+      // always allowed regardless of which skill is active.
+      const allowed = this.isToolAllowed(tc.function.name);
+      if (!allowed.ok) {
+        runErr = new Error(allowed.reason ?? 'tool blocked by active skills');
+      } else {
+        try {
+          result = await this.tools.execute(tc.function.name, parsed.args, signal, this.prompter);
+        } catch (err) {
+          runErr = err instanceof Error ? err : new Error(String(err));
+        }
+      }
+    }
+    const durationMs = Date.now() - start;
+    let errStr = '';
+    if (runErr) {
+      errStr = runErr.message;
+      result = `ERROR: ${errStr}`;
+      logError('agent: tool failed', {
+        tool: tc.function.name,
+        duration_ms: durationMs,
+        err: errStr,
+      });
+    }
+    return { result, errStr, durationMs };
+  }
+
+  /** Emit a tool result, apply any active-skill activation (load_skill), and
+   *  append the tool message to both history and the working transcript. */
+  private recordToolResult(
+    tc: ToolCall,
+    parsed: ParsedToolCall,
+    res: ToolCallResult,
+    emit: EventSink,
+    working: Message[],
+  ): void {
+    emit({
+      type: 'tool-result',
+      id: tc.id,
+      name: tc.function.name,
+      result: res.result,
+      err: res.errStr,
+      durationMs: res.durationMs,
+    });
+
+    if (tc.function.name === 'load_skill' && !res.errStr) {
+      const nm = typeof parsed.args.name === 'string' ? parsed.args.name : '';
+      if (nm) {
+        this.activeSkills.add(nm);
+        emit({ type: 'skill-active', name: nm });
+      }
+    }
+
+    const toolMsg: Message = {
+      role: 'tool',
+      content: res.result,
+      toolCallID: tc.id,
+      name: tc.function.name,
+    };
+    this.history.push(toolMsg);
+    working.push(toolMsg);
   }
 
   private async chat(
@@ -898,12 +1056,46 @@ export class Agent {
       promptProfile: this.promptProfile,
       memory: this.memory,
       engagement: this.engagement,
+      curatedMemory: this.memoryStore?.index() ?? '',
     });
   }
 
   private async save(): Promise<void> {
     if (!this.store) return;
     await this.store.save(this.history, this.target, this.memory);
+  }
+
+  /**
+   * Save a durable curated-memory fact (the `#` quick-add / `/memory add`
+   * backend). Rebuilds the system prompt and reseeds it into history so the new
+   * fact's catalog entry is in context on the very next turn, then persists.
+   * Returns the stored fact, or null when there's no store or the text is empty.
+   */
+  async addMemory(input: AddMemoryInput): Promise<MemoryFact | null> {
+    if (!this.memoryStore) return null;
+    const fact = this.memoryStore.add(input);
+    if (!fact) return null;
+    this.rebuildSystemPrompt();
+    this.history = ensureSystemPrompt(this.history, this.sysPrompt);
+    await this.save();
+    return fact;
+  }
+
+  /** All curated memory facts (for /memory listing). */
+  listCuratedMemory(): MemoryFact[] {
+    return this.memoryStore?.list() ?? [];
+  }
+
+  /** Recall the curated facts relevant to this turn; emit a transparency note
+   *  naming what was pulled in (mirrors how Claude Code surfaces recalled
+   *  memories). Returns the prompt stanza, or '' when nothing matched. */
+  private recallCuratedMemory(userMsg: string, emit: EventSink): string {
+    if (!this.memoryStore) return '';
+    const query = [userMsg, this.target.baseURL(), this.target.name()].join('\n');
+    const facts = this.memoryStore.search(query, 5);
+    if (facts.length === 0) return '';
+    emit({ type: 'memory-recall', names: facts.map((f) => f.name) });
+    return formatMemoryRecall(facts);
   }
 
   private buildIntelligenceContext(userMsg: string): string {

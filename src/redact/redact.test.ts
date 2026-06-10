@@ -95,6 +95,38 @@ describe('redact.apply', () => {
     expect(out).not.toContain(apiKey);
   });
 
+  it('redacts OpenSSH-format private key blocks (E25 regression)', () => {
+    const begin = frag('-----BEGIN OPENSSH PRIVATE ', 'KEY-----');
+    const end = frag('-----END OPENSSH PRIVATE ', 'KEY-----');
+    const body = frag('b3BlbnNzaC1rZXktdjEAAAAABG5vbmU', 'AAAAEbm9uZQAAAA');
+    const out = apply(`${begin}\n${body}\n${end}`);
+    expect(out).not.toContain(body);
+    expect(out).toContain('BEGIN PRIVATE KEY');
+  });
+
+  it('redacts credentials in connection-string query params (E25)', () => {
+    const pw = 'hunter2';
+    const out = apply(`mongodb+srv://u@db.internal/app?authSource=admin&password=${pw}`);
+    expect(out).not.toContain(`password=${pw}`);
+    expect(out).toContain('authSource=admin'); // non-secret param survives
+    const tok = frag('ya29.', 'a0AfH6SMBshort');
+    const out2 = apply(`https://api/x?access_token=${tok}&page=2`);
+    expect(out2).not.toContain(tok);
+    expect(out2).toContain('page=2');
+  });
+
+  it('redacts the HTTP Digest auth response hash (E25)', () => {
+    const hash = frag('6629fae49393a0', '5397450978507c4ef1');
+    const out = apply(`Authorization: Digest username="admin", realm="x", response="${hash}"`);
+    expect(out).not.toContain(hash);
+  });
+
+  it('redacts a GCP service-account private_key_id (E25)', () => {
+    const kid = frag('a1b2c3d4e5f6', '0718293a4b5c6d7e8f90');
+    const out = apply(`{"type":"service_account","private_key_id":"${kid}"}`);
+    expect(out).not.toContain(kid);
+  });
+
   it('returns empty string for empty input', () => {
     expect(apply('')).toBe('');
   });
