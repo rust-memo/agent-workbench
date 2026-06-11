@@ -45,4 +45,20 @@ describe('MCPTool', () => {
     expect(out).toContain('truncated');
     expect(out.length).toBeLessThan(140_000);
   });
+
+  it('bounds deeply nested content instead of recursing without limit', async () => {
+    // Build a tree deeper than the recursion cap.
+    let deep: Record<string, unknown> = { leaf: 'x' };
+    for (let i = 0; i < 100; i++) deep = { nested: deep };
+    const session = {
+      serverName: 'browser',
+      callTool: async () => ({ isError: false, content: deep }),
+    } as unknown as MCPSession;
+    const tool = new MCPTool(session, 'mcp_browser_deep', 'deep', 'Deep output', {
+      type: 'object',
+    });
+
+    const out = await tool.run({}, new AbortController().signal, new AlwaysAllow());
+    expect(out).toContain('max depth exceeded');
+  });
 });

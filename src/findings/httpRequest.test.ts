@@ -65,6 +65,30 @@ describe('findingRequestForBurp', () => {
     expect(request).toContain('Authorization: Basic YWxpY2U6c2VjcmV0');
   });
 
+  it('emits the curl user-agent header for space, attached, and equals forms', () => {
+    const space = findingRequestForBurp(
+      findingWithCurl('curl -A "MyScanner/1.0" https://app.example.com/api/x'),
+    );
+    expect(space).toContain('User-Agent: MyScanner/1.0');
+    expect(space).not.toContain('User-Agent: PentesterFlow');
+
+    const long = findingRequestForBurp(
+      findingWithCurl('curl --user-agent "Custom UA" https://app.example.com/api/x'),
+    );
+    expect(long).toContain('User-Agent: Custom UA');
+    expect(long).not.toContain('User-Agent: PentesterFlow');
+
+    const attached = findingRequestForBurp(
+      findingWithCurl('curl -AAttachedUA https://app.example.com/api/x'),
+    );
+    expect(attached).toContain('User-Agent: AttachedUA');
+
+    const eq = findingRequestForBurp(
+      findingWithCurl('curl --user-agent=EqualsUA https://app.example.com/api/x'),
+    );
+    expect(eq).toContain('User-Agent: EqualsUA');
+  });
+
   it('falls back to finding url and method when no curl request can be parsed', () => {
     const request = findingRequestForBurp({
       ...findingWithCurl('echo not-curl'),

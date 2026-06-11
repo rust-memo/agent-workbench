@@ -30,15 +30,16 @@ export class BackendError extends Error {
 }
 
 /**
- * True for errors worth retrying with backoff: rate limits (429) and transient
- * upstream failures (502/503/504), plus a `backend-down` transport error (the
- * daemon may be mid-restart). A plain 500 is treated as deterministic and NOT
- * retried, since it usually reflects a bad request rather than a blip.
+ * True for errors worth retrying with backoff: rate limits (429), request
+ * timeouts (408), and transient upstream failures (502/503/504), plus a
+ * `backend-down` transport error (the daemon may be mid-restart). A plain 500
+ * is treated as deterministic and NOT retried, since it usually reflects a bad
+ * request rather than a blip.
  */
 export function isTransient(err: unknown): boolean {
   if (!(err instanceof BackendError)) return false;
   if (err.category === 'backend-down') return true;
-  return err.statusCode === 429 || [502, 503, 504].includes(err.statusCode);
+  return err.statusCode === 429 || [408, 502, 503, 504].includes(err.statusCode);
 }
 
 /**
@@ -106,6 +107,18 @@ export function classifyBackend(
   }
 
   const lower = msg.toLowerCase();
+  // Rate-limit phrasing in the body. Some proxies (OpenRouter, ...) surface a
+  // transient rate limit inside an HTTP 200, where `statusCode` doesn't signal
+  // it. Map it to 429 so isTransient treats it as retryable; real error
+  // statuses keep their own code (already transient when they should be).
+  if (
+    lower.includes('rate limit') ||
+    lower.includes('rate_limit') ||
+    lower.includes('too many requests') ||
+    lower.includes('quota exceeded')
+  ) {
+    return new BackendError(backend, 'unknown', statusCode < 400 ? 429 : statusCode, msg);
+  }
   if (
     lower.includes('no models loaded') ||
     lower.includes('no model loaded') ||

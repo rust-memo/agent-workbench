@@ -124,6 +124,15 @@ export function reducer(state: AppState, action: Action): AppState {
       const phase: UiPhase = state.busy ? 'answering' : state.phase;
       const last = state.transcript[state.transcript.length - 1];
       if (last && last.kind === 'assistant' && last.streaming) {
+        // Fresh entry object per token so the live frame sees the new text.
+        // This rebuilds the transcript array (O(N) shallow copy) per token.
+        // We deliberately keep it rather than hoisting the streaming entry
+        // into a dedicated `state.live` field: the live entry no longer pays
+        // the markdown/highlight cost per token (Transcript renders it as
+        // plain text — see plainRowsForEntry), so the shallow array copy is a
+        // cheap O(N) of references, and a `state.live` split would ripple
+        // through every reducer case (assistant-text, done, expand) and the
+        // `transcript.at(-1)` consumers/tests for no meaningful gain.
         const updated = { ...last, text: last.text + action.text };
         return {
           ...state,

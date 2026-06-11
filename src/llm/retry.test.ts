@@ -75,11 +75,28 @@ describe('withRetry', () => {
     withRA.retryAfterMs = 9000; // larger than the computed 500ms first step
     const fn = vi
       .fn()
-      .mockRejectedValueOnce(transient(429)) // backoff 500
+      .mockRejectedValueOnce(transient(429)) // backoff 500 (+ jitter)
       .mockRejectedValueOnce(withRA) // Retry-After 9000 wins
       .mockResolvedValueOnce('ok');
     await withRetry(fn, { sleep, baseDelayMs: 500, maxDelayMs: 8000 });
-    expect(delays).toEqual([500, 9000]);
+    // First wait is the 500ms step plus a sub-step jitter; the second is the
+    // server-advised 9000ms (well under the 30s ceiling, so it passes through).
+    expect(delays[0]).toBeGreaterThanOrEqual(500);
+    expect(delays[0]).toBeLessThan(1000);
+    expect(delays[1]).toBe(9000);
+  });
+
+  it('clamps an absurd Retry-After to the 30s ceiling', async () => {
+    const delays: number[] = [];
+    const sleep = vi.fn(async (ms: number) => {
+      delays.push(ms);
+    });
+    const withRA = transient(429);
+    withRA.retryAfterMs = 3_600_000; // a bad proxy asking for an hour
+    const fn = vi.fn().mockRejectedValueOnce(withRA).mockResolvedValueOnce('ok');
+    await withRetry(fn, { sleep, baseDelayMs: 500, maxDelayMs: 8000 });
+    expect(delays).toHaveLength(1);
+    expect(delays[0]).toBe(30_000);
   });
 
   it('stops when the signal is already aborted', async () => {

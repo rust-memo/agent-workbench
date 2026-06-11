@@ -84,9 +84,15 @@ export function dirFromPath(path: string): string {
 
 // ---------- Store ----------
 
+// fsync every Nth save (and always the first). The atomic tmp+rename already
+// keeps the file consistent between syncs; this trims an fsync off most saves on
+// the hot autosave path while still flushing to durable storage periodically.
+const FSYNC_EVERY = 5;
+
 export class Store {
   readonly path: string;
   readonly id: string;
+  private saveCount = 0;
 
   constructor(path: string, id = '') {
     this.path = path;
@@ -129,14 +135,19 @@ export class Store {
       memory: memory ?? undefined,
       messages,
     };
-    const body = `${JSON.stringify(file, null, 2)}\n`;
+    // Compact JSON (no pretty-printing) — the message history can be large and
+    // load() parses either form identically.
+    const body = `${JSON.stringify(file)}\n`;
+
+    this.saveCount += 1;
+    const shouldFsync = this.saveCount === 1 || this.saveCount % FSYNC_EVERY === 0;
 
     const tmp = `${this.path}.tmp.${randomBytes(3).toString('hex')}`;
     let fh: Awaited<ReturnType<typeof open>> | undefined;
     try {
       fh = await open(tmp, 'wx', 0o600);
       await fh.writeFile(body);
-      await fh.sync();
+      if (shouldFsync) await fh.sync();
       await fh.close();
       fh = undefined;
       await rename(tmp, this.path);

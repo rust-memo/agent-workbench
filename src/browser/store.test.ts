@@ -46,6 +46,40 @@ describe('CaptureStore Burp bridge', () => {
     expect(store.listBurpIssues()).toEqual([]);
   });
 
+  it('updates an existing Burp issue in place without duplicating it', () => {
+    const store = new CaptureStore();
+    store.ingestBurpIssue({
+      id: 'finding:idor',
+      title: 'IDOR (initial)',
+      url: 'https://app.example.com/api/orders/1',
+      detail: 'first pass',
+    });
+    store.ingestBurpIssue({
+      id: 'finding:idor',
+      title: 'IDOR (confirmed)',
+      url: 'https://app.example.com/api/orders/1',
+      detail: 'second pass',
+    });
+    const issues = store.listBurpIssues();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.title).toBe('IDOR (confirmed)');
+  });
+
+  it('re-seeing a request id refreshes its LRU position so prune keeps it', () => {
+    const store = new CaptureStore({ maxEntries: 100 });
+    for (let i = 0; i < 100; i += 1) {
+      store.ingest({ id: String(i), url: `https://app.example.com/r/${i}`, method: 'GET' });
+    }
+    // Refresh the oldest entry — it should move to the tail.
+    store.ingest({ id: '0', url: 'https://app.example.com/r/0', method: 'GET' });
+    // Push 50 more, evicting the 50 oldest (now ids 1..50, not the refreshed 0).
+    for (let i = 100; i < 150; i += 1) {
+      store.ingest({ id: String(i), url: `https://app.example.com/r/${i}`, method: 'GET' });
+    }
+    expect(store.getRequest('wr:0')).toBeDefined();
+    expect(store.getRequest('wr:1')).toBeUndefined();
+  });
+
   it('truncates large captured bodies before retaining them', () => {
     const store = new CaptureStore();
     store.ingest({

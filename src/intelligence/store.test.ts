@@ -151,6 +151,46 @@ describe('IntelligenceStore', () => {
     );
   });
 
+  it('boosts the fresher scenario at equal token overlap', async () => {
+    const root = tempRoot();
+    const store = new IntelligenceStore({ cwd: join(root, 'project'), home: join(root, 'home') });
+    // Same triggers/category/confidence; titles deliberately don't match the
+    // query, so token overlap is identical and only recency differs.
+    await store.append({
+      title: 'Alpha note',
+      category: 'recon-gap',
+      triggers: ['graphql', 'introspection'],
+      technologies: ['GraphQL'],
+      lesson: 'lesson one',
+      recommendedChecks: ['/graphql'],
+      avoidMissing: ['GraphQL IDE'],
+      source: 'test',
+      confidence: 0.8,
+      updatedAt: '2025-01-01T00:00:00.000Z',
+    });
+    await store.append({
+      title: 'Beta note',
+      category: 'recon-gap',
+      triggers: ['graphql', 'introspection'],
+      technologies: ['GraphQL'],
+      lesson: 'lesson two',
+      recommendedChecks: ['/graphql'],
+      avoidMissing: ['GraphQL IDE'],
+      source: 'test',
+      confidence: 0.8,
+      updatedAt: '2026-06-10T00:00:00.000Z',
+    });
+
+    const results = store.search('graphql introspection', 5);
+    const alpha = results.find((r) => r.scenario.title === 'Alpha note');
+    const beta = results.find((r) => r.scenario.title === 'Beta note');
+    expect(beta).toBeDefined();
+    expect(alpha).toBeDefined();
+    // Fresher Beta outranks stale Alpha and carries a strictly higher score.
+    expect(results[0]?.scenario.title).toBe('Beta note');
+    expect((beta?.score ?? 0) > (alpha?.score ?? 0)).toBe(true);
+  });
+
   it('formats compact model guidance', () => {
     const root = tempRoot();
     const store = new IntelligenceStore({ cwd: join(root, 'project'), home: join(root, 'home') });

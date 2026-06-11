@@ -91,6 +91,10 @@ const LMSTUDIO_STOP_TOKENS = [
   '<|im_start|>',
   '<|endoftext|>',
 ];
+/** Longest stop token, hoisted so the streaming tail scan doesn't recompute
+ *  `Math.max(...stops.map(...))` on every chunk. A partial stop token at the
+ *  end of a chunk is at most this many chars, so that's all we ever withhold. */
+const MAX_STOP_TOKEN_LEN = Math.max(...LMSTUDIO_STOP_TOKENS.map((s) => s.length));
 const CHAT_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class OpenAIClient implements Client, StreamingClient, Pinger {
@@ -151,56 +155,64 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
 
   private async chatOnce(req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
     const body = this.encodeRequest(req, false);
-    const combinedSignal = withTimeout(signal, CHAT_TIMEOUT_MS);
-    let resp: Response;
+    const { signal: combinedSignal, dispose } = withTimeout(signal, CHAT_TIMEOUT_MS);
     try {
-      resp = await fetch(`${this.baseURL}/chat/completions`, {
-        method: 'POST',
-        headers: this.headers(),
-        body: JSON.stringify(body),
-        signal: combinedSignal,
-      });
-    } catch (err) {
-      throw classifyBackend(this.label, err, 0, undefined);
+      let resp: Response;
+      try {
+        resp = await fetch(`${this.baseURL}/chat/completions`, {
+          method: 'POST',
+          headers: this.headers(),
+          body: JSON.stringify(body),
+          signal: combinedSignal,
+        });
+      } catch (err) {
+        throw classifyBackend(this.label, err, 0, undefined);
+      }
+      const raw = await resp.text();
+      if (resp.status !== 200) {
+        throw withRetryAfter(classifyBackend(this.label, null, resp.status, raw), resp);
+      }
+      let out: OAIChatResp;
+      try {
+        out = JSON.parse(raw) as OAIChatResp;
+      } catch {
+        throw classifyBackend(
+          this.label,
+          null,
+          resp.status,
+          `invalid JSON from ${this.label}: ${raw}`,
+        );
+      }
+      if (out.error) {
+        // Some proxies (OpenRouter, ...) return HTTP 200 with the real failure
+        // in the body — including transient rate limits. Route it through the
+        // classifier so rate-limit phrasing becomes a retryable BackendError
+        // instead of a plain, non-retryable Error.
+        throw classifyBackend(this.label, null, resp.status, out.error.message);
+      }
+      if (!out.choices?.length) {
+        throw new Error(`${this.label}: empty choices`);
+      }
+      const choice = out.choices[0];
+      if (!choice) throw new Error(`${this.label}: empty choices`);
+      // Prefer content; fall back to reasoning_content only when content is
+      // empty (M7) so a reasoning-only non-streaming response isn't blank.
+      const rawText = choice.message.content || choice.message.reasoning_content || '';
+      const msg: Message = {
+        role: 'assistant',
+        content: this.trimLeakedTemplate(rawText),
+      };
+      if (choice.message.tool_calls?.length) {
+        msg.toolCalls = choice.message.tool_calls.map<ToolCall>((tc) => ({
+          id: tc.id ?? newCallID(),
+          type: 'function',
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        }));
+      }
+      return { message: msg, finishReason: choice.finish_reason ?? '' };
+    } finally {
+      dispose();
     }
-    const raw = await resp.text();
-    if (resp.status !== 200) {
-      throw withRetryAfter(classifyBackend(this.label, null, resp.status, raw), resp);
-    }
-    let out: OAIChatResp;
-    try {
-      out = JSON.parse(raw) as OAIChatResp;
-    } catch {
-      throw classifyBackend(
-        this.label,
-        null,
-        resp.status,
-        `invalid JSON from ${this.label}: ${raw}`,
-      );
-    }
-    if (out.error) {
-      throw new Error(`${this.label} api error: ${out.error.message}`);
-    }
-    if (!out.choices?.length) {
-      throw new Error(`${this.label}: empty choices`);
-    }
-    const choice = out.choices[0];
-    if (!choice) throw new Error(`${this.label}: empty choices`);
-    // Prefer content; fall back to reasoning_content only when content is empty
-    // (M7) so a reasoning-only non-streaming response isn't returned blank.
-    const rawText = choice.message.content || choice.message.reasoning_content || '';
-    const msg: Message = {
-      role: 'assistant',
-      content: this.trimLeakedTemplate(rawText),
-    };
-    if (choice.message.tool_calls?.length) {
-      msg.toolCalls = choice.message.tool_calls.map<ToolCall>((tc) => ({
-        id: tc.id ?? newCallID(),
-        type: 'function',
-        function: { name: tc.function.name, arguments: tc.function.arguments },
-      }));
-    }
-    return { message: msg, finishReason: choice.finish_reason ?? '' };
   }
 
   async chatStream(
@@ -211,13 +223,19 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
     // Retry only the connection setup (E7): a transient 429/5xx surfaces before
     // any delta is emitted, so re-running openStream can't double-emit tokens.
     // Once the 200 stream is flowing, a mid-stream failure is NOT retried.
-    const resp = await withRetry(() => this.openStream(req, signal), { signal });
+    const { resp, dispose } = await withRetry(() => this.openStream(req, signal), { signal });
     if (!resp.body) {
+      dispose();
       throw new Error(`${this.label}: empty stream body`);
     }
 
-    let rawContent = '';
-    let emittedLen = 0;
+    // Accumulate visible text as chunks and join once at the end (avoids the
+    // O(n²) `rawContent += delta` re-allocation). `pending` holds the trailing
+    // bytes withheld because they might be the head of a split stop token; the
+    // template scan only ever looks at `pending + delta`, a bounded window, so
+    // it no longer re-scans the whole buffer on every chunk (LM Studio fix).
+    const chunks: string[] = [];
+    let pending = '';
     let finish = '';
     const parts = new Map<number, { id: string; name: string; args: string }>();
     // Synthetic index for servers that omit tool_call `index`. Persisted across
@@ -226,65 +244,76 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
     let fallbackIndex = -1;
     let stoppedByTemplate = false;
 
-    for await (const line of iterSSE(resp.body)) {
-      if (stoppedByTemplate) break;
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data === '[DONE]') break;
-      let chunk: OAIStreamResp;
-      try {
-        chunk = JSON.parse(data) as OAIStreamResp;
-      } catch {
-        continue;
-      }
-      const choice = chunk.choices?.[0];
-      if (!choice) continue;
-      if (choice.finish_reason) finish = choice.finish_reason;
-      const delta = choice.delta ?? {};
-      // Stream reasoning as visible progress (drives the UI off "planning")
-      // but never accumulate it into rawContent — the returned message must
-      // stay reasoning-free so it doesn't poison the next request.
-      if (delta.reasoning_content) onDelta(delta.reasoning_content);
-      if (delta.content) {
-        rawContent += delta.content;
-        const view = this.streamingTemplateView(rawContent);
-        const emitText = view.visible.slice(emittedLen);
-        if (emitText) {
-          onDelta(emitText);
-          emittedLen += emitText.length;
+    try {
+      for await (const line of iterSSE(resp.body)) {
+        if (stoppedByTemplate) break;
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') break;
+        let chunk: OAIStreamResp;
+        try {
+          chunk = JSON.parse(data) as OAIStreamResp;
+        } catch {
+          continue;
         }
-        if (view.stopped) {
-          rawContent = view.visible;
-          stoppedByTemplate = true;
-          break;
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        if (choice.finish_reason) finish = choice.finish_reason;
+        const delta = choice.delta ?? {};
+        // Stream reasoning as visible progress (drives the UI off "planning")
+        // but never accumulate it into chunks — the returned message must stay
+        // reasoning-free so it doesn't poison the next request.
+        if (delta.reasoning_content) onDelta(delta.reasoning_content);
+        if (delta.content) {
+          // Only re-scan the small held tail plus the new delta, never the full
+          // accumulated content. A stop token can only complete within this
+          // window because we always withhold any partial-stop suffix.
+          const buf = pending + delta.content;
+          const view = this.streamingTemplateView(buf);
+          if (view.visible) {
+            onDelta(view.visible);
+            chunks.push(view.visible);
+          }
+          if (view.stopped) {
+            pending = '';
+            stoppedByTemplate = true;
+            break;
+          }
+          pending = buf.slice(view.visible.length);
+        }
+        for (const tc of delta.tool_calls ?? []) {
+          let idx: number;
+          if (typeof tc.index === 'number') {
+            idx = tc.index;
+          } else if (tc.id || tc.function?.name || fallbackIndex < 0) {
+            // A new call begins (carries an id/name) or this is the first
+            // index-less fragment: allocate a fresh synthetic index.
+            fallbackIndex = nextMapKey(parts);
+            idx = fallbackIndex;
+          } else {
+            // Pure argument continuation with no index/id/name: keep appending
+            // to the call we're assembling rather than starting a new one.
+            idx = fallbackIndex;
+          }
+          const existing = parts.get(idx) ?? { id: '', name: '', args: '' };
+          if (tc.id) existing.id = tc.id;
+          if (tc.function?.name) existing.name += tc.function.name;
+          if (tc.function?.arguments) existing.args += tc.function.arguments;
+          parts.set(idx, existing);
         }
       }
-      for (const tc of delta.tool_calls ?? []) {
-        let idx: number;
-        if (typeof tc.index === 'number') {
-          idx = tc.index;
-        } else if (tc.id || tc.function?.name || fallbackIndex < 0) {
-          // A new call begins (carries an id/name) or this is the first
-          // index-less fragment: allocate a fresh synthetic index.
-          fallbackIndex = nextMapKey(parts);
-          idx = fallbackIndex;
-        } else {
-          // Pure argument continuation with no index/id/name: keep appending to
-          // the call we're currently assembling rather than starting a new one.
-          idx = fallbackIndex;
-        }
-        const existing = parts.get(idx) ?? { id: '', name: '', args: '' };
-        if (tc.id) existing.id = tc.id;
-        if (tc.function?.name) existing.name += tc.function.name;
-        if (tc.function?.arguments) existing.args += tc.function.arguments;
-        parts.set(idx, existing);
+
+      // Stream ended without a stop token: the withheld tail was real text, so
+      // flush it now.
+      if (!stoppedByTemplate && pending) {
+        onDelta(pending);
+        chunks.push(pending);
       }
+    } finally {
+      dispose();
     }
 
-    const finalContent = this.trimLeakedTemplate(rawContent);
-    if (!stoppedByTemplate && finalContent.length > emittedLen) {
-      onDelta(finalContent.slice(emittedLen));
-    }
+    const finalContent = this.trimLeakedTemplate(chunks.join(''));
     const msg: Message = { role: 'assistant', content: finalContent };
     const indexes = Array.from(parts.keys()).sort((a, b) => a - b);
     if (indexes.length > 0) {
@@ -301,28 +330,39 @@ export class OpenAIClient implements Client, StreamingClient, Pinger {
     return { message: msg, finishReason: finish };
   }
 
-  /** Open the SSE stream and return the live 200 response, or throw a
-   *  (retry-annotated) BackendError. Extracted so withRetry can re-attempt the
-   *  connection without re-entering the consume loop. */
-  private async openStream(req: ChatRequest, signal?: AbortSignal): Promise<Response> {
+  /** Open the SSE stream and return the live 200 response paired with a
+   *  `dispose` that cancels its timeout, or throw a (retry-annotated)
+   *  BackendError. Extracted so withRetry can re-attempt the connection without
+   *  re-entering the consume loop; on success the caller owns `dispose` and
+   *  must call it once the stream is fully consumed. */
+  private async openStream(
+    req: ChatRequest,
+    signal?: AbortSignal,
+  ): Promise<{ resp: Response; dispose: () => void }> {
     const body = this.encodeRequest(req, true);
-    const combinedSignal = withTimeout(signal, CHAT_TIMEOUT_MS);
-    let resp: Response;
+    const { signal: combinedSignal, dispose } = withTimeout(signal, CHAT_TIMEOUT_MS);
     try {
-      resp = await fetch(`${this.baseURL}/chat/completions`, {
-        method: 'POST',
-        headers: { ...this.headers(), Accept: 'text/event-stream' },
-        body: JSON.stringify(body),
-        signal: combinedSignal,
-      });
+      let resp: Response;
+      try {
+        resp = await fetch(`${this.baseURL}/chat/completions`, {
+          method: 'POST',
+          headers: { ...this.headers(), Accept: 'text/event-stream' },
+          body: JSON.stringify(body),
+          signal: combinedSignal,
+        });
+      } catch (err) {
+        throw classifyBackend(this.label, err, 0, undefined);
+      }
+      if (resp.status !== 200) {
+        const raw = await resp.text();
+        throw withRetryAfter(classifyBackend(this.label, null, resp.status, raw), resp);
+      }
+      return { resp, dispose };
     } catch (err) {
-      throw classifyBackend(this.label, err, 0, undefined);
+      // Failed attempt: clear its timer now so a retry doesn't leak it.
+      dispose();
+      throw err;
     }
-    if (resp.status !== 200) {
-      const raw = await resp.text();
-      throw withRetryAfter(classifyBackend(this.label, null, resp.status, raw), resp);
-    }
-    return resp;
   }
 
   private headers(): Record<string, string> {
@@ -443,7 +483,7 @@ function firstStopIndex(content: string, stops: readonly string[]): number {
 }
 
 function longestStopPrefixSuffix(content: string, stops: readonly string[]): number {
-  const max = Math.min(content.length, Math.max(...stops.map((s) => s.length - 1)));
+  const max = Math.min(content.length, MAX_STOP_TOKEN_LEN - 1);
   for (let n = max; n > 0; n--) {
     const suffix = content.slice(-n);
     if (stops.some((stop) => stop.startsWith(suffix))) return n;
@@ -480,8 +520,26 @@ async function* iterSSE(body: ReadableStream<Uint8Array>): AsyncIterable<string>
   }
 }
 
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const timeout = AbortSignal.timeout(ms);
-  if (!signal) return timeout;
-  return AbortSignal.any([signal, timeout]);
+/** Build a per-request abort signal that fires when `parent` aborts OR after
+ *  `ms`, paired with a `dispose` that clears the timer and detaches the
+ *  listener. Replaces AbortSignal.timeout/any, whose 10-minute timers stay
+ *  pending (and keep the event loop alive) until they fire even after the
+ *  request has settled — leaking one timer per call. Call `dispose()` in a
+ *  finally once the request (incl. stream consumption) is done. */
+function withTimeout(
+  parent: AbortSignal | undefined,
+  ms: number,
+): { signal: AbortSignal; dispose: () => void } {
+  const ctl = new AbortController();
+  const onAbort = () => ctl.abort();
+  if (parent?.aborted) ctl.abort();
+  else parent?.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => ctl.abort(), ms);
+  return {
+    signal: ctl.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener('abort', onAbort);
+    },
+  };
 }

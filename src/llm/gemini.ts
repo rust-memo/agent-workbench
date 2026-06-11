@@ -1,7 +1,16 @@
 import type { Client, Pinger } from './client.js';
-import { classifyBackend } from './errors.js';
+import { type BackendError, classifyBackend, parseRetryAfter } from './errors.js';
 import { newCallID } from './ids.js';
+import { withRetry } from './retry.js';
 import type { ChatRequest, ChatResponse, Message, ToolSpec } from './types.js';
+
+/** Annotate a backend error with the server's Retry-After so withRetry can
+ *  honor it instead of its computed backoff. */
+function withRetryAfter(err: BackendError, resp: Response): BackendError {
+  const ms = parseRetryAfter(resp.headers.get('retry-after'));
+  if (ms !== undefined) err.retryAfterMs = ms;
+  return err;
+}
 
 interface GeminiPart {
   text?: string;
@@ -37,11 +46,20 @@ export class GeminiClient implements Client, Pinger {
   readonly baseURL: string;
   readonly apiKey: string;
   readonly modelID: string;
+  private readonly temperature?: number;
+  private readonly maxTokens?: number;
 
-  constructor(baseURL: string, apiKey: string, model: string) {
+  constructor(
+    baseURL: string,
+    apiKey: string,
+    model: string,
+    genOpts: { temperature?: number; maxTokens?: number } = {},
+  ) {
     this.baseURL = baseURL.replace(/\/$/, '');
     this.apiKey = apiKey;
     this.modelID = model;
+    this.temperature = genOpts.temperature;
+    this.maxTokens = genOpts.maxTokens;
   }
 
   name(): string {
@@ -53,8 +71,11 @@ export class GeminiClient implements Client, Pinger {
   }
 
   async ping(signal?: AbortSignal): Promise<void> {
-    const resp = await fetch(`${this.baseURL}/models?key=${encodeURIComponent(this.apiKey)}`, {
+    const resp = await fetch(`${this.baseURL}/models`, {
       method: 'GET',
+      // Pass the key as a header, not a query param, so it can't leak into
+      // access/proxy logs or error messages that echo the request URL.
+      headers: { 'x-goog-api-key': this.apiKey },
       signal,
     });
     if (resp.status >= 500) {
@@ -63,70 +84,103 @@ export class GeminiClient implements Client, Pinger {
   }
 
   async chat(req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
-    const body = encodeRequest(req);
-    const combinedSignal = withTimeout(signal, CHAT_TIMEOUT_MS);
-    let resp: Response;
+    // Retry rate limits / transient 5xx with backoff (E7). The call has no
+    // observable side effects before it returns, so re-running it is safe.
+    return withRetry(() => this.chatOnce(req, signal), { signal });
+  }
+
+  private async chatOnce(req: ChatRequest, signal?: AbortSignal): Promise<ChatResponse> {
+    const body = encodeRequest(req, { temperature: this.temperature, maxTokens: this.maxTokens });
+    const { signal: combinedSignal, dispose } = withTimeout(signal, CHAT_TIMEOUT_MS);
     try {
-      resp = await fetch(
-        `${this.baseURL}/${withModelsPrefix(req.model || this.modelID)}:generateContent?key=${encodeURIComponent(this.apiKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: combinedSignal,
-        },
-      );
-    } catch (err) {
-      throw classifyBackend('gemini', err, 0, undefined);
-    }
-    const raw = await resp.text();
-    if (resp.status !== 200) {
-      throw classifyBackend('gemini', null, resp.status, raw);
-    }
-    let out: GeminiResponse;
-    try {
-      out = JSON.parse(raw) as GeminiResponse;
-    } catch {
-      throw classifyBackend('gemini', null, resp.status, `invalid JSON from gemini: ${raw}`);
-    }
-    if (out.error?.message) {
-      throw new Error(`gemini api error: ${out.error.message}`);
-    }
-    const choice = out.candidates?.[0];
-    if (!choice) throw new Error('gemini: empty candidates');
-    const parts = choice.content?.parts ?? [];
-    const text = parts
-      .map((p) => p.text ?? '')
-      .filter(Boolean)
-      .join('');
-    const calls = parts.filter((p) => Boolean(p.functionCall?.name));
-    const msg: Message = { role: 'assistant', content: text };
-    if (calls.length > 0) {
-      msg.toolCalls = calls.map((part) => {
-        const fc = part.functionCall;
-        const thoughtSignature = part.thoughtSignature ?? part.thought_signature;
-        return {
-          id: newCallID(),
-          type: 'function',
-          function: {
-            name: fc?.name ?? '',
-            arguments: JSON.stringify(fc?.args ?? {}),
+      let resp: Response;
+      try {
+        resp = await fetch(
+          `${this.baseURL}/${withModelsPrefix(req.model || this.modelID)}:generateContent`,
+          {
+            method: 'POST',
+            // Key in a header, not the URL query, to keep it out of logs.
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
+            body: JSON.stringify(body),
+            signal: combinedSignal,
           },
-          ...(thoughtSignature ? { provider: { gemini: { thoughtSignature } } } : {}),
-        };
-      });
+        );
+      } catch (err) {
+        throw classifyBackend('gemini', err, 0, undefined);
+      }
+      const raw = await resp.text();
+      if (resp.status !== 200) {
+        throw withRetryAfter(classifyBackend('gemini', null, resp.status, raw), resp);
+      }
+      let out: GeminiResponse;
+      try {
+        out = JSON.parse(raw) as GeminiResponse;
+      } catch {
+        throw classifyBackend('gemini', null, resp.status, `invalid JSON from gemini: ${raw}`);
+      }
+      if (out.error?.message) {
+        // Route through the classifier so rate-limit phrasing in a 200 body
+        // becomes a retryable BackendError rather than a plain Error.
+        throw classifyBackend('gemini', null, resp.status, out.error.message);
+      }
+      const choice = out.candidates?.[0];
+      if (!choice) throw new Error('gemini: empty candidates');
+      const parts = choice.content?.parts ?? [];
+      const text = parts
+        .map((p) => p.text ?? '')
+        .filter(Boolean)
+        .join('');
+      const calls = parts.filter((p) => Boolean(p.functionCall?.name));
+      const msg: Message = { role: 'assistant', content: text };
+      if (calls.length > 0) {
+        msg.toolCalls = calls.map((part) => {
+          const fc = part.functionCall;
+          const thoughtSignature = part.thoughtSignature ?? part.thought_signature;
+          return {
+            id: newCallID(),
+            type: 'function',
+            function: {
+              name: fc?.name ?? '',
+              arguments: JSON.stringify(fc?.args ?? {}),
+            },
+            ...(thoughtSignature ? { provider: { gemini: { thoughtSignature } } } : {}),
+          };
+        });
+      }
+      return { message: msg, finishReason: choice.finishReason ?? '' };
+    } finally {
+      dispose();
     }
-    return { message: msg, finishReason: choice.finishReason ?? '' };
   }
 }
 
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const timeout = AbortSignal.timeout(ms);
-  if (!signal) return timeout;
-  return AbortSignal.any([signal, timeout]);
+/** Build a per-request abort signal that fires when `parent` aborts OR after
+ *  `ms`, paired with a `dispose` that clears the timer and detaches the
+ *  listener. Replaces AbortSignal.timeout/any, whose 10-minute timers stay
+ *  pending until they fire even after the request settles — leaking one timer
+ *  per call. Call `dispose()` in a finally once the request is done. */
+function withTimeout(
+  parent: AbortSignal | undefined,
+  ms: number,
+): { signal: AbortSignal; dispose: () => void } {
+  const ctl = new AbortController();
+  const onAbort = () => ctl.abort();
+  if (parent?.aborted) ctl.abort();
+  else parent?.addEventListener('abort', onAbort, { once: true });
+  const timer = setTimeout(() => ctl.abort(), ms);
+  return {
+    signal: ctl.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener('abort', onAbort);
+    },
+  };
 }
 
-function encodeRequest(req: ChatRequest): Record<string, unknown> {
+function encodeRequest(
+  req: ChatRequest,
+  genOpts: { temperature?: number; maxTokens?: number } = {},
+): Record<string, unknown> {
   const systemText = req.messages
     .filter((m) => m.role === 'system')
     .map((m) => m.content)
@@ -140,6 +194,16 @@ function encodeRequest(req: ChatRequest): Record<string, unknown> {
   }
   if (req.tools?.length) {
     body.tools = [{ functionDeclarations: req.tools.map(encodeTool) }];
+  }
+  // Generation knobs. Gemini nests these under generationConfig and names the
+  // token cap maxOutputTokens (vs OpenAI's max_tokens). Emit only what's set.
+  const generationConfig: Record<string, unknown> = {};
+  if (genOpts.temperature !== undefined) generationConfig.temperature = genOpts.temperature;
+  if (genOpts.maxTokens !== undefined && genOpts.maxTokens > 0) {
+    generationConfig.maxOutputTokens = genOpts.maxTokens;
+  }
+  if (Object.keys(generationConfig).length > 0) {
+    body.generationConfig = generationConfig;
   }
   return body;
 }

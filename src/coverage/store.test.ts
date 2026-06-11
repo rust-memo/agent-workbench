@@ -128,4 +128,37 @@ describe('CoverageStore persistence', () => {
     expect(list).toHaveLength(0);
     expect(dir).toBeTruthy(); // sanity that we wrote into a tmpdir
   });
+
+  it('does not lose pre-existing entries under concurrent first marks', async () => {
+    // Pre-populate the file with one entry via a first store.
+    const { store: seed, path } = makeStore();
+    await seed.mark({ endpoint: 'GET /seed', param: 'id', vulnClass: 'idor', status: 'tried' });
+    await seed.flush();
+
+    // A fresh store: fire two mark() calls before load() has resolved. The race
+    // fix must let the on-disk seed survive alongside both new marks.
+    const fresh = new CoverageStore(path);
+    await Promise.all([
+      fresh.mark({ endpoint: 'GET /a', param: 'p', vulnClass: 'xss', status: 'tried' }),
+      fresh.mark({ endpoint: 'GET /b', param: 'q', vulnClass: 'sqli', status: 'tried' }),
+    ]);
+    await fresh.flush();
+
+    const reread = new CoverageStore(path);
+    const list = await reread.list();
+    const endpoints = list.map((e) => e.endpoint).sort();
+    expect(endpoints).toEqual(['GET /a', 'GET /b', 'GET /seed']);
+  });
+
+  it('coalesces a burst of marks into a single settled snapshot', async () => {
+    const { store, path } = makeStore();
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        store.mark({ endpoint: `GET /x${i}`, param: 'p', vulnClass: 'xss', status: 'tried' }),
+      ),
+    );
+    await store.flush();
+    const reread = new CoverageStore(path);
+    expect(await reread.list()).toHaveLength(20);
+  });
 });

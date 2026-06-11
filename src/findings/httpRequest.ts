@@ -12,8 +12,6 @@ const CURL_DATA_FLAGS = new Set([
 ]);
 
 const CURL_SKIP_VALUE_FLAGS = new Set([
-  '-A',
-  '--user-agent',
   '--connect-timeout',
   '--max-time',
   '--retry',
@@ -118,13 +116,27 @@ export function httpRequestFromCurl(command: string, fallbackMethod?: string): s
       }
       continue;
     }
-    if (CURL_SKIP_VALUE_FLAGS.has(arg)) {
-      i++;
+    // -A / --user-agent set the request User-Agent. Capture the value (space,
+    // attached -Avalue, and --user-agent=value forms) and emit a header so the
+    // replayed request keeps the original UA instead of falling back to the
+    // PentesterFlow default. Must run before the skip-value handling below.
+    if (arg === '-A' || arg === '--user-agent') {
+      const ua = args[++i];
+      if (ua && !hasHeader(headers, 'user-agent')) headers.push(`User-Agent: ${ua}`);
       continue;
     }
-    const userAgentEq = arg.startsWith('--user-agent=') ? arg.slice('--user-agent='.length) : '';
-    if (userAgentEq && !hasHeader(headers, 'user-agent')) {
-      headers.push(`User-Agent: ${userAgentEq}`);
+    if (arg.startsWith('-A') && arg.length > 2) {
+      const ua = arg.slice(2);
+      if (ua && !hasHeader(headers, 'user-agent')) headers.push(`User-Agent: ${ua}`);
+      continue;
+    }
+    if (arg.startsWith('--user-agent=')) {
+      const ua = arg.slice('--user-agent='.length);
+      if (ua && !hasHeader(headers, 'user-agent')) headers.push(`User-Agent: ${ua}`);
+      continue;
+    }
+    if (CURL_SKIP_VALUE_FLAGS.has(arg)) {
+      i++;
       continue;
     }
     if (arg.startsWith('http://') || arg.startsWith('https://')) {

@@ -52,7 +52,7 @@ beforeAll(async () => {
       );
       return;
     }
-    if (req.method === 'GET' && req.url === '/gemini/models?key=gemini-key') {
+    if (req.method === 'GET' && req.url === '/gemini/models') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({

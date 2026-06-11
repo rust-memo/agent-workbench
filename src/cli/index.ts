@@ -23,6 +23,7 @@ import { Store as FindingsStore } from '../findings/store.js';
 import { IntelligenceStore } from '../intelligence/store.js';
 import * as llmFactory from '../llm/factory.js';
 import { modelReliabilityWarning } from '../llm/modelWarnings.js';
+import { OllamaClient } from '../llm/ollama.js';
 import { detectOllamaContextWindow, probeToolSupport } from '../llm/probe.js';
 import {
   DEEPSEEK_DEFAULT_BASE_URL,
@@ -646,6 +647,10 @@ async function main(): Promise<number> {
           ).then((info) => {
             if (!info) return;
             bannerHolder.publish?.({ contextWindow: info.numCtx });
+            // Apply the detected window so the chat requests actually send
+            // options.num_ctx — otherwise Ollama silently truncates input at
+            // its 2048 default no matter what the model metadata reports.
+            if (agent.client instanceof OllamaClient) agent.client.setNumCtx(info.numCtx);
             const threshold = agent.getAutoCompactThreshold();
             // Heuristic: warn when num_ctx is smaller than 1.5x the
             // auto-compact threshold. The agent compacts at `threshold`

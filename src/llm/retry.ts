@@ -21,6 +21,11 @@ export interface RetryOptions {
   onRetry?: (info: { attempt: number; delayMs: number; err: unknown }) => void;
 }
 
+/** Ceiling for server-advised Retry-After waits. A misbehaving proxy can echo
+ *  an absurd Retry-After (minutes/hours); clamp it so one bad response can't
+ *  stall the agent for far longer than our own backoff ever would. */
+const MAX_RETRY_AFTER_MS = 30_000;
+
 const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
   new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error('aborted'));
@@ -53,9 +58,12 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}
     } catch (err) {
       if (opts.signal?.aborted) throw err;
       if (attempt >= retries || !isTransient(err)) throw err;
+      // Exponential backoff plus a little jitter so concurrent callers hitting
+      // the same rate limit don't all wake and re-fire in lockstep.
       const backoff = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
+      const jittered = backoff + Math.random() * baseDelayMs;
       const advised = err instanceof BackendError ? (err.retryAfterMs ?? 0) : 0;
-      const delayMs = Math.max(backoff, advised);
+      const delayMs = Math.max(jittered, Math.min(advised, MAX_RETRY_AFTER_MS));
       opts.onRetry?.({ attempt: attempt + 1, delayMs, err });
       await sleep(delayMs);
       attempt += 1;

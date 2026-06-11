@@ -36,7 +36,7 @@ import { PermissionModal } from './PermissionModal.js';
 import { SecretInputModal, type SecretInputRequest } from './SecretInputModal.js';
 import { SkillsModal } from './SkillsModal.js';
 import { SlashMenu } from './SlashMenu.js';
-import { StatusBar } from './StatusBar.js';
+import { StatusBar, type StatusProps } from './StatusBar.js';
 import { useTerminalSize } from './TerminalSize.js';
 import { EntryView, Transcript } from './Transcript.js';
 import type { AskRequest } from './askBridge.js';
@@ -369,22 +369,9 @@ export function App({
     return () => clearInterval(timer);
   }, [agent, sessionDebug]);
 
-  // Elapsed-time clock for the busy status line. A 1s ticker runs only while
-  // the agent is busy, so a long-running tool (a scan, a slow curl) shows a
-  // climbing timer instead of an indistinguishable-from-a-hang spinner.
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  useEffect(() => {
-    if (!state.busy) {
-      setElapsedSeconds(0);
-      return;
-    }
-    const start = Date.now();
-    setElapsedSeconds(0);
-    const id = setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-    return () => clearInterval(id);
-  }, [state.busy]);
+  // The 1s elapsed-time clock now lives in <ElapsedTimer> (below the
+  // render) so its per-second tick re-renders only the status line, not the
+  // whole App tree (Transcript, Input, menus). See ElapsedTimer.
 
   // Live terminal width via the TerminalSizeProvider mounted in
   // cli/index.ts. Subscribes to stdout `resize` so the layout reflows
@@ -428,11 +415,17 @@ export function App({
   // built-in commands. Disabled skills are excluded — re-enabling from
   // /skills brings them back into the menu. Computed eagerly (no memo)
   // because the live-reload watcher mutates the registry in place and
-  // we want every render to see the current set.
-  const skillSlashItems = agent.skills.listEnabled().map((s) => ({
-    name: `/${s.name}`,
-    description: `[skill] ${s.description.slice(0, 70)}${s.description.length > 70 ? '…' : ''}`,
-  }));
+  // we want every render to see the current set — but only when the input
+  // is actually a slash command. filterSlash returns [] for non-slash
+  // input regardless of extras, so building the skill list on every
+  // keystroke (the common case is plain prose) is pure waste; gate it
+  // behind the `/` prefix so typing prose never touches the registry.
+  const skillSlashItems = inputValue.startsWith('/')
+    ? agent.skills.listEnabled().map((s) => ({
+        name: `/${s.name}`,
+        description: `[skill] ${s.description.slice(0, 70)}${s.description.length > 70 ? '…' : ''}`,
+      }))
+    : [];
   const slashMatches = filterSlash(inputValue, skillSlashItems);
 
   // @file picker is shown when the active word starts with `@<partial>`.
@@ -794,17 +787,39 @@ export function App({
   // actively-streaming assistant entry (tail entry still flagged
   // `streaming`) renders in the live frame below, until 'done' finalizes
   // it and it joins the committed log.
-  const liveEntry = (() => {
+  // Derive the committed/live split + transcript-derived hints once per
+  // transcript or filter change rather than on every keystroke. App
+  // re-renders on each input change via useTextField, but none of these
+  // depend on the input value, so memoizing keeps typing cheap.
+  const { liveEntry, filteredCommitted, showLiveEntry, expandHint } = useMemo(() => {
     const last = state.transcript[state.transcript.length - 1];
-    return last && last.kind === 'assistant' && last.streaming ? last : null;
-  })();
-  const committed = liveEntry ? state.transcript.slice(0, -1) : state.transcript;
-  const filteredCommitted = filterTranscript(committed, state.transcriptFilter);
-  const showLiveEntry = liveEntry
-    ? transcriptEntryMatchesFilter(liveEntry, state.transcriptFilter)
-    : false;
-  const target = agent.target.baseURL() || agent.target.name();
-  const memoryStats = agent.getMemoryStats();
+    const live = last && last.kind === 'assistant' && last.streaming ? last : null;
+    const committed = live ? state.transcript.slice(0, -1) : state.transcript;
+    return {
+      liveEntry: live,
+      filteredCommitted: filterTranscript(committed, state.transcriptFilter),
+      showLiveEntry: live ? transcriptEntryMatchesFilter(live, state.transcriptFilter) : false,
+      expandHint: state.transcript.some((e) => e.collapsible && !e.expanded),
+    };
+  }, [state.transcript, state.transcriptFilter]);
+
+  // Agent-derived status values for the StatusBar. These read live agent
+  // state (token estimate, memory item count, compact threshold, target)
+  // which can only change when the transcript grows or a turn starts/ends —
+  // never from typing — so key the memo on [transcript length, busy] to skip
+  // the work on every keystroke. The transcript length / busy keys are
+  // intentional cache-busters for agent's internal mutable state (which React
+  // can't observe), hence the suppression of the "extra dependency" lint.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: transcript.length + busy are deliberate cache-busters for agent's hidden mutable state
+  const statusInfo = useMemo(
+    () => ({
+      target: agent.target.baseURL() || agent.target.name(),
+      memoryItems: agent.getMemoryStats().items,
+      ctxTokens: agent.approxTokens(),
+      compactThreshold: agent.getAutoCompactThreshold(),
+    }),
+    [agent, state.transcript.length, state.busy],
+  );
 
   return (
     <Box flexDirection="column" width={cols}>
@@ -815,7 +830,7 @@ export function App({
       />
       {liveEntry && showLiveEntry ? (
         <Box flexDirection="column">
-          <EntryView entry={liveEntry} />
+          <EntryView entry={liveEntry} streaming />
         </Box>
       ) : null}
       {secretInput ? (
@@ -842,27 +857,52 @@ export function App({
             <SlashMenu items={slashMatches} selected={slashIdx} />
           ) : null}
           <Input value={inputValue} cursor={input.cursor} disabled={state.busy} />
-          <StatusBar
+          <ElapsedTimer
             busy={state.busy}
             apiReady={state.apiReady}
             activeSkill={state.activeSkill}
             yolo={state.yolo}
-            ctxTokens={agent.approxTokens()}
-            compactThreshold={agent.getAutoCompactThreshold()}
-            memoryItems={memoryStats.items}
+            ctxTokens={statusInfo.ctxTokens}
+            compactThreshold={statusInfo.compactThreshold}
+            memoryItems={statusInfo.memoryItems}
             model={state.bannerData.model}
             toolSupport={state.bannerData.toolSupport}
             phase={state.phase}
             transcriptFilter={state.transcriptFilter}
-            target={target}
-            expandHint={state.transcript.some((e) => e.collapsible && !e.expanded)}
+            target={statusInfo.target}
+            expandHint={expandHint}
             runningTool={state.runningTool}
-            elapsedSeconds={elapsedSeconds}
           />
         </>
       )}
     </Box>
   );
+}
+
+// ---------- elapsed clock ----------
+
+/**
+ * Owns the 1s busy-clock so its per-second tick re-renders only the status
+ * line, not the whole App tree. A ticker runs only while the agent is busy,
+ * so a long-running tool (a scan, a slow curl) shows a climbing timer instead
+ * of an indistinguishable-from-a-hang spinner. All other StatusBar props are
+ * forwarded unchanged; only `elapsedSeconds` is owned here.
+ */
+function ElapsedTimer(props: Omit<StatusProps, 'elapsedSeconds'>): JSX.Element {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  useEffect(() => {
+    if (!props.busy) {
+      setElapsedSeconds(0);
+      return;
+    }
+    const start = Date.now();
+    setElapsedSeconds(0);
+    const id = setInterval(() => {
+      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [props.busy]);
+  return <StatusBar {...props} elapsedSeconds={elapsedSeconds} />;
 }
 
 // ---------- helpers ----------

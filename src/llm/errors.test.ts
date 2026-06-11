@@ -1,7 +1,7 @@
 // Backend error-classification tests.
 
 import { describe, expect, it } from 'vitest';
-import { BackendError, classifyBackend } from './errors.js';
+import { BackendError, classifyBackend, isTransient } from './errors.js';
 
 describe('classifyBackend', () => {
   it('tags ECONNREFUSED as backend-down', () => {
@@ -47,5 +47,24 @@ describe('classifyBackend', () => {
     const body = JSON.stringify({ error: { message: 'invalid api key' } });
     const out = classifyBackend('openai-compat', null, 401, body);
     expect(out.detail).toBe('invalid api key');
+  });
+
+  it('maps rate-limit phrasing in a 200 body to a retryable 429', () => {
+    // Proxies (OpenRouter, ...) surface transient rate limits inside an HTTP 200.
+    const out = classifyBackend('openrouter', null, 200, 'Rate limit exceeded, retry shortly');
+    expect(out.statusCode).toBe(429);
+    expect(isTransient(out)).toBe(true);
+  });
+
+  it('keeps the original status for rate-limit phrasing on an error response', () => {
+    const out = classifyBackend('openrouter', null, 503, 'too many requests');
+    expect(out.statusCode).toBe(503);
+    expect(isTransient(out)).toBe(true);
+  });
+});
+
+describe('isTransient status set', () => {
+  it('flags 408 request timeout as transient', () => {
+    expect(isTransient(new BackendError('test', 'unknown', 408, 'timeout'))).toBe(true);
   });
 });

@@ -26,7 +26,7 @@ import { buildDecisionPlan } from './decisionPlanner.js';
 import type { AgentEvent } from './events.js';
 import { MaxStepsError } from './events.js';
 import { expandFileMentions } from './mentions.js';
-import { stripThinkingTags } from './sanitize.js';
+import { ThinkingStreamFilter, stripThinkingTags } from './sanitize.js';
 import { type PromptProfile, type ToolingProfile, buildSystemPrompt } from './systemPrompt.js';
 
 export type EventSink = (e: AgentEvent) => void;
@@ -84,6 +84,13 @@ const MAX_PARALLEL_TOOL_CALLS = 4;
 // allowed-tools gate). A step containing one of these falls back to sequential
 // execution so ordering stays deterministic.
 const STATEFUL_TOOLS = new Set(['load_skill']);
+// Marker that replaces a tool result's body when the mid-turn context guard
+// elides it to keep `working` under the context window. The prefix is matched
+// to skip already-elided results on a later pass within the same turn.
+const MIDTURN_ELISION_PREFIX = '[tool output elided mid-turn to fit context';
+// Never elide the freshest tool results — they're what the model is actively
+// reasoning over. The guard only touches results older than this many.
+const MIDTURN_ELISION_KEEP_RECENT = 4;
 
 interface ParsedToolCall {
   args: Record<string, unknown>;
@@ -168,6 +175,15 @@ export class Agent {
   // Skills explicitly invoked from slash commands before a turn starts.
   // These become active at the start of the next run, then are cleared.
   private pendingSkills: Set<string> = new Set();
+  // Lazily-cached token estimate for the tool JSON schemas we send on every
+  // request (req.tools). Keyed on the tool count so a registry change
+  // recomputes it cheaply; -1 means "not yet computed".
+  private toolsTokensCache = 0;
+  private toolsTokensKey = -1;
+  // True once the current runInner turn has executed at least one successful
+  // tool call. Gates end-of-turn intelligence learning so clarifying questions
+  // and chit-chat don't pollute the cross-session KB. Reset each runInner.
+  private turnExecutedTool = false;
 
   constructor(opts: AgentOptions) {
     this.client = opts.client;
@@ -513,6 +529,22 @@ export class Agent {
     return total;
   }
 
+  /**
+   * Token estimate for the tool JSON schemas attached to every tool-enabled
+   * request (req.tools). approxTokens() deliberately counts only history so the
+   * StatusBar reading stays stable, but the auto-compact gate must include this
+   * (~2–5k tokens) or it under-counts the real request size and lets the window
+   * overflow. Cached and recomputed only when the tool count changes.
+   */
+  private toolsTokenEstimate(): number {
+    const count = this.tools.names().length;
+    if (count !== this.toolsTokensKey) {
+      this.toolsTokensCache = Math.floor(JSON.stringify(this.tools.asLLMTools()).length / 4);
+      this.toolsTokensKey = count;
+    }
+    return this.toolsTokensCache;
+  }
+
   // ---------- session lifecycle ----------
 
   async reset(): Promise<void> {
@@ -662,6 +694,9 @@ export class Agent {
   ): Promise<void> {
     this.activeSkills = new Set(this.pendingSkills);
     this.pendingSkills.clear();
+    // Reset per-turn tracking: end-of-turn learning only fires when this turn
+    // actually executed a successful tool call (M — gate learnIntelligence).
+    this.turnExecutedTool = false;
 
     // Repair any dangling assistant tool_calls left by a previously aborted
     // turn before this turn's user message is appended, so the request we send
@@ -673,19 +708,24 @@ export class Agent {
     // turn against for the auto-compact gate (M5 — a large @file attachment
     // must count toward the threshold) and the content actually sent below.
     const expandedUserMsg = expandFileMentions(userMsg);
-    const incomingTokens = Math.floor(Buffer.byteLength(expandedUserMsg, 'utf8') / 4);
+    // content.length/4 (UTF-16 units) to match approxTokens()'s estimator — the
+    // two are summed in the gate below, so they must use the same unit.
+    const incomingTokens = Math.floor(expandedUserMsg.length / 4);
 
     // Auto-compact gate. Run BEFORE we add the new user message so the
     // compaction summary doesn't include this turn's question — the
     // user expects their prompt to be answered, not summarized away.
     // Includes the incoming (post-expansion) message size so a near-threshold
     // turn plus a large attachment can't blow past the context window with no
-    // compaction (M5). Circuit breaker: stop retrying if we've failed N times
-    // in a row; the user can still call /compact manually to investigate.
+    // compaction (M5), and the tool-schema size (req.tools) which is sent on
+    // every tool-enabled request but isn't part of the history approxTokens()
+    // counts. Circuit breaker: stop retrying if we've failed N times in a row;
+    // the user can still call /compact manually to investigate.
+    const toolsTokens = opts?.tools === false ? 0 : this.toolsTokenEstimate();
     if (
       this.autoCompactThreshold > 0 &&
       this.consecutiveCompactFailures < MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES &&
-      this.approxTokens() + incomingTokens >= this.autoCompactThreshold
+      this.approxTokens() + incomingTokens + toolsTokens >= this.autoCompactThreshold
     ) {
       await this.autoCompact(signal, emit);
     }
@@ -733,6 +773,12 @@ export class Agent {
     for (let step = 0; step < maxSteps; step += 1) {
       if (signal.aborted) throw new Error('aborted');
 
+      // Mid-turn context guard: a single tool-heavy step can resend a `working`
+      // transcript that overflows the window long before the between-turns
+      // auto-compact gate runs again. Elide the oldest large tool results in
+      // the working copy if we've grown past the threshold (M2).
+      if (this.autoCompactThreshold > 0) this.guardWorkingContext(working, emit, opts);
+
       const req: ChatRequest = {
         model: this.client.model(),
         messages: working,
@@ -761,7 +807,13 @@ export class Agent {
         emit({ type: 'assistant-text', text: resp.message.content });
       }
       if (!hasToolCalls) {
-        await this.learnIntelligence(buildTurnLearningText(userMsg, resp.message.content));
+        // Only learn from turns that did substantive work (≥1 successful tool
+        // call) — clarifying questions and chit-chat would otherwise pollute
+        // the cross-session KB. Fire-and-forget so it never blocks the hot path
+        // (learnIntelligence has its own catch/logError).
+        if (this.turnExecutedTool) {
+          void this.learnIntelligence(buildTurnLearningText(userMsg, resp.message.content));
+        }
         return;
       }
 
@@ -771,9 +823,63 @@ export class Agent {
   }
 
   /**
+   * Mid-turn context guard (M2). When the `working` transcript we resend each
+   * step — plus the tool schemas attached to every request — crosses the
+   * auto-compact threshold, elide the OLDEST large tool-result messages,
+   * replacing their body with a short marker, oldest-first, until we're back
+   * under the threshold or only the most recent few tool results remain. Only
+   * the `working` COPIES are touched (the array slot is swapped for a fresh
+   * object); `this.history` keeps full fidelity for the session save and the
+   * next compaction. Emits an informational event so the user sees it happened.
+   */
+  private guardWorkingContext(working: Message[], emit: EventSink, opts?: AgentRunOptions): void {
+    const toolsTokens = opts?.tools === false ? 0 : this.toolsTokenEstimate();
+    const size = (): number => {
+      let total = toolsTokens;
+      for (const m of working) {
+        total += Math.floor(m.content.length / 4);
+        for (const tc of m.toolCalls ?? []) {
+          total += Math.floor((tc.function.name.length + tc.function.arguments.length) / 4);
+        }
+      }
+      return total;
+    };
+    if (size() < this.autoCompactThreshold) return;
+
+    // Tool-result message indices, oldest first, excluding the most recent few
+    // (never elide the freshest results — they're what the model is reasoning
+    // over right now).
+    const toolIdx: number[] = [];
+    for (let i = 0; i < working.length; i += 1) {
+      if (working[i]?.role === 'tool') toolIdx.push(i);
+    }
+    const elidable = toolIdx.slice(0, Math.max(0, toolIdx.length - MIDTURN_ELISION_KEEP_RECENT));
+
+    let dropped = 0;
+    for (const i of elidable) {
+      if (size() < this.autoCompactThreshold) break;
+      const msg = working[i];
+      if (!msg || msg.content.startsWith(MIDTURN_ELISION_PREFIX)) continue;
+      const bytes = msg.content.length;
+      // Swap the slot for a fresh object so the shared history message keeps its
+      // full content (working and history share tool-message references).
+      working[i] = { ...msg, content: `${MIDTURN_ELISION_PREFIX} — ${bytes} bytes dropped]` };
+      dropped += bytes;
+    }
+
+    if (dropped > 0) {
+      emit({
+        type: 'decision',
+        summary: `context guard: elided ${dropped} bytes of older tool output mid-turn to fit the context window`,
+      });
+    }
+  }
+
+  /**
    * Run the step's tool calls. A single call, or any step containing a
    * state-mutating tool (load_skill), runs sequentially with the original
-   * interleaved tool-call/tool-result emit order and per-call save. Multiple
+   * interleaved tool-call/tool-result emit order and a single save after the
+   * loop. Multiple
    * independent calls run with bounded concurrency (E1): all tool-call events
    * are emitted in order, the calls execute concurrently, then results are
    * emitted and tool messages recorded in the original order so the
@@ -802,10 +908,12 @@ export class Agent {
         });
         const res = await this.runParsedToolCall(tc, parsed, signal);
         this.recordToolResult(tc, parsed, res, emit, working);
-        await this.save().catch((err) =>
-          emit({ type: 'error', err: new Error(`save session: ${errMessage(err)}`) }),
-        );
       }
+      // One save after the loop — matches the parallel branch and avoids a
+      // full-session write after every tool result.
+      await this.save().catch((err) =>
+        emit({ type: 'error', err: new Error(`save session: ${errMessage(err)}`) }),
+      );
       return;
     }
 
@@ -916,6 +1024,10 @@ export class Agent {
       durationMs: res.durationMs,
     });
 
+    // A successful tool call marks this turn as substantive, which gates the
+    // end-of-turn intelligence learning (M — gate learnIntelligence).
+    if (!res.errStr) this.turnExecutedTool = true;
+
     if (tc.function.name === 'load_skill' && !res.errStr) {
       const nm = typeof parsed.args.name === 'string' ? parsed.args.name : '';
       if (nm) {
@@ -941,13 +1053,22 @@ export class Agent {
   ): Promise<{ resp: Awaited<ReturnType<Client['chat']>>; streamed: boolean }> {
     if (this.streamingEnabled && isStreaming(this.client)) {
       const c: StreamingClient = this.client;
+      // Strip thinking-block content from the live stream so a local model's
+      // <think>…</think> reasoning never reaches the UI (H — streamed think-tag
+      // leak). The filter holds back tags split across chunk boundaries; flush()
+      // releases any safe tail at stream end. The final resp.message.content is
+      // still run through stripThinkingTags by the caller for the history copy.
+      const filter = new ThinkingStreamFilter();
       const resp = await c.chatStream(
         { ...req, stream: true },
         (delta) => {
-          if (delta) emit({ type: 'assistant-delta', text: delta });
+          const visible = filter.push(delta);
+          if (visible) emit({ type: 'assistant-delta', text: visible });
         },
         signal,
       );
+      const tail = filter.flush();
+      if (tail) emit({ type: 'assistant-delta', text: tail });
       return { resp, streamed: true };
     }
     const resp = await this.client.chat(req, signal);

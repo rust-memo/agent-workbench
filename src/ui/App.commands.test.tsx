@@ -17,6 +17,8 @@ import { runSelfUpdate } from '../update/selfUpdate.js';
 import { App, type AppProps } from './App.js';
 import type { BannerData } from './Banner.js';
 import { TerminalSizeProvider } from './TerminalSize.js';
+import { EntryView } from './Transcript.js';
+import type { TranscriptEntry } from './state.js';
 
 vi.mock('../update/selfUpdate.js', () => ({
   runSelfUpdate: vi.fn(async () => ({
@@ -599,5 +601,34 @@ describe('UI slash commands (terminal integration)', () => {
     expect(runSelfUpdate).toHaveBeenCalledWith('v0.1.0');
     expect(mounted.lastFrame()).toContain('update installed');
     expect(runSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('EntryView streaming vs committed rendering', () => {
+  // A streaming assistant entry renders in App's live frame on every token.
+  // The markdown/highlight pipeline must NOT run there (it re-runs over the
+  // whole accumulated answer per token); it runs once when the entry is
+  // finalized and committed to <Static>.
+  const entry: TranscriptEntry = {
+    kind: 'assistant',
+    text: 'Here is **bold** and `code`',
+    streaming: true,
+  };
+
+  it('renders the live (streaming) entry as plain text — no markdown pipeline', () => {
+    const { lastFrame } = render(<EntryView entry={entry} streaming />);
+    const frame = lastFrame() ?? '';
+    // Raw markdown markers survive verbatim because renderMarkdown is skipped.
+    expect(frame).toContain('**bold**');
+    expect(frame).toContain('`code`');
+  });
+
+  it('renders the committed (finalized) entry through the markdown pipeline', () => {
+    const { lastFrame } = render(<EntryView entry={{ ...entry, streaming: false }} />);
+    const frame = lastFrame() ?? '';
+    // renderMarkdown strips the ** / ` markers, styling the inner text instead.
+    expect(frame).toContain('bold');
+    expect(frame).not.toContain('**bold**');
+    expect(frame).not.toContain('`code`');
   });
 });

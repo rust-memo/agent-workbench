@@ -3,6 +3,7 @@
 
 import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
+import { memo } from 'react';
 import type { ToolSupportPill } from './Banner.js';
 import type { TranscriptFilter, UiPhase } from './state.js';
 
@@ -63,7 +64,7 @@ function superMode(props: StatusProps): React.ReactElement | null {
   ) : null;
 }
 
-export function StatusBar(props: StatusProps): React.ReactElement {
+function StatusBarInner(props: StatusProps): React.ReactElement {
   // Status content on the left, SuperMode pinned to the right edge of the
   // terminal via space-between. When YOLO is off the right slot is empty and
   // the status simply left-aligns.
@@ -74,6 +75,13 @@ export function StatusBar(props: StatusProps): React.ReactElement {
     </Box>
   );
 }
+
+// memo() with a shallow prop compare: App re-renders on every keystroke, but
+// the status props are stable between keystrokes (the agent.* status values
+// are memoized in App, and the elapsed clock is owned by ElapsedTimer), so
+// typing skips the StatusBar render entirely. The clock tick still re-renders
+// it (elapsedSeconds changes), which is exactly the one update we want.
+export const StatusBar = memo(StatusBarInner);
 
 function busyLine(props: StatusProps): React.ReactElement {
   const phaseText = phaseLabel(props.phase);

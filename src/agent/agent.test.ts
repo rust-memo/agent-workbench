@@ -287,14 +287,30 @@ describe('Agent.run', () => {
     }
   });
 
-  it('learns continuous memory from completed turns', async () => {
+  it('learns continuous memory from substantive (tool-using) turns', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'pf-agent-learn-'));
     try {
+      // A turn must execute ≥1 successful tool call to be learned from, so
+      // script a tool call then a final text answer. End-of-turn learning is
+      // fire-and-forget (void), so poll until it settles.
+      const tools = new ToolRegistry();
+      tools.register(new EchoTool());
       const client = new FakeClient([
         {
-          message: { role: 'assistant', content: 'noted' },
-          finishReason: 'stop',
+          message: {
+            role: 'assistant',
+            content: '',
+            toolCalls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'echo', arguments: JSON.stringify({ msg: 'check' }) },
+              },
+            ],
+          },
+          finishReason: 'tool_calls',
         },
+        { message: { role: 'assistant', content: 'noted' }, finishReason: 'stop' },
       ]);
       const intelligence = new IntelligenceStore({
         cwd: join(tmp, 'project'),
@@ -302,7 +318,7 @@ describe('Agent.run', () => {
       });
       const agent = new Agent({
         client,
-        tools: new ToolRegistry(),
+        tools,
         skills: new SkillRegistry(),
         prompter: new AlwaysAllow(),
         store: null,
@@ -315,12 +331,49 @@ describe('Agent.run', () => {
         'I prefer concise final answers with verification commands.',
         new AbortController().signal,
         sink,
-        { tools: false },
       );
 
-      expect(
-        intelligence.search('concise final answers verification', 3)[0]?.scenario.category,
-      ).toBe('user-preference');
+      let category: string | undefined;
+      for (let i = 0; i < 100; i += 1) {
+        category = intelligence.search('concise final answers verification', 3)[0]?.scenario
+          .category;
+        if (category) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(category).toBe('user-preference');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not learn from a turn with no tool calls (no KB pollution)', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'pf-agent-nolearn-'));
+    try {
+      const intelligence = new IntelligenceStore({
+        cwd: join(tmp, 'project'),
+        home: join(tmp, 'home'),
+      });
+      const agent = new Agent({
+        client: new FakeClient([
+          { message: { role: 'assistant', content: 'noted' }, finishReason: 'stop' },
+        ]),
+        tools: new ToolRegistry(),
+        skills: new SkillRegistry(),
+        prompter: new AlwaysAllow(),
+        store: null,
+        target: new Target(),
+        intelligence,
+      });
+      const { sink } = collect();
+      await agent.run(
+        'I prefer concise final answers with verification commands.',
+        new AbortController().signal,
+        sink,
+        { tools: false },
+      );
+      // Give any (incorrectly fired) background learning a chance to land.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(intelligence.search('concise final answers verification', 3)).toHaveLength(0);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -1350,6 +1403,82 @@ describe('Agent parallel tool dispatch (E1)', () => {
     // History keeps the same order: assistant, tool(first), tool(second).
     const toolMsgs = agent.getHistory().filter((m) => m.role === 'tool');
     expect(toolMsgs.map((m) => m.toolCallID)).toEqual(['c1', 'c2']);
+  });
+});
+
+// ---------- M2: mid-turn context guard ----------
+
+/** A tool that returns a large, fixed-size output so a few calls overflow a
+ *  small context threshold within a single turn. */
+class BigOutputTool implements Tool {
+  constructor(private readonly size: number) {}
+  name(): string {
+    return 'big';
+  }
+  description(): string {
+    return 'big';
+  }
+  schema(): Record<string, unknown> {
+    return { type: 'object', properties: {} };
+  }
+  requiresPermission(): boolean {
+    return false;
+  }
+  async run(): Promise<string> {
+    return 'x'.repeat(this.size);
+  }
+}
+
+describe('Agent mid-turn context guard (M2)', () => {
+  it('elides the oldest large tool results in the working copy without touching history', async () => {
+    // Six single-tool steps each return a 6000-char (~1500-token) result, then
+    // a final text answer. With KEEP_RECENT=4, the guard can elide once the 5th
+    // result lands and the working size crosses the threshold.
+    const toolStep: ChatResponse = {
+      message: {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 'c', type: 'function', function: { name: 'big', arguments: '{}' } }],
+      },
+      finishReason: 'tool_calls',
+    };
+    const scripted: ChatResponse[] = [
+      toolStep,
+      toolStep,
+      toolStep,
+      toolStep,
+      toolStep,
+      toolStep,
+      { message: { role: 'assistant', content: 'done' }, finishReason: 'stop' },
+    ];
+    const tools = new ToolRegistry();
+    tools.register(new BigOutputTool(6000));
+    const agent = new Agent({
+      client: new FakeClient(scripted),
+      tools,
+      skills: new SkillRegistry(),
+      prompter: new AlwaysAllow(),
+      store: null,
+      target: new Target(),
+    });
+    // Threshold above the starting (system+user) size so the between-turns gate
+    // doesn't fire, but below what 5 big results push `working` to.
+    agent.setAutoCompactThreshold(agent.approxTokens() + 5000);
+
+    const { events, sink } = collect();
+    await agent.run('go', new AbortController().signal, sink);
+
+    // The guard emitted an informational event naming the elision.
+    const guardEvent = events.find(
+      (e) => e.type === 'decision' && e.summary.includes('context guard'),
+    );
+    expect(guardEvent).toBeDefined();
+
+    // History keeps every tool result at full fidelity (only the working copy
+    // was elided), so the saved session is lossless.
+    const toolMsgs = agent.getHistory().filter((m) => m.role === 'tool');
+    expect(toolMsgs.length).toBe(6);
+    expect(toolMsgs.every((m) => m.content.length === 6000)).toBe(true);
   });
 });
 

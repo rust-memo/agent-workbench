@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AlwaysDeny } from '../permission/permission.js';
 import type { Prompter } from '../permission/permission.js';
-import { WebFetchTool } from './web.js';
+import { WebFetchTool, WebSearchTool, clearWebCache } from './web.js';
 
 const prompter = {} as Prompter;
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Clear cross-test cache state so each case exercises the cold network path.
+  clearWebCache();
 });
 
 describe('WebFetchTool', () => {
@@ -120,5 +122,107 @@ describe('WebFetchTool', () => {
     await expect(
       new WebFetchTool().run({ url: 'file:///etc/passwd' }, new AbortController().signal, prompter),
     ).rejects.toThrow(/unsupported URL scheme/);
+  });
+
+  it('serves a second fetch of the same URL from cache without re-hitting the network', async () => {
+    const fetch = vi.fn(async () => new Response('<p>cached body</p>'));
+    vi.stubGlobal('fetch', fetch);
+
+    const first = await new WebFetchTool().run(
+      { url: 'https://example.com/advisory' },
+      new AbortController().signal,
+      prompter,
+    );
+    const second = await new WebFetchTool().run(
+      { url: 'https://example.com/advisory' },
+      new AbortController().signal,
+      prompter,
+    );
+
+    expect(second).toBe(first);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not cache failed fetches', async () => {
+    const fetch = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    await new WebFetchTool().run(
+      { url: 'https://example.com/down' },
+      new AbortController().signal,
+      prompter,
+    );
+    await new WebFetchTool().run(
+      { url: 'https://example.com/down' },
+      new AbortController().signal,
+      prompter,
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('WebSearchTool', () => {
+  it('parses structured DuckDuckGo results', async () => {
+    const html = `
+      <a class="result__a" href="https://cve.example/CVE-1">Title One</a>
+      <a class="result__snippet">Snippet one</a>`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(html)),
+    );
+
+    const out = await new WebSearchTool().run(
+      { query: 'CVE-1' },
+      new AbortController().signal,
+      prompter,
+    );
+    expect(out).toContain('Title One');
+    expect(out).toContain('https://cve.example/CVE-1');
+    expect(out).toContain('Snippet one');
+  });
+
+  it('falls back to raw anchor extraction when the structured markup changes', async () => {
+    // No result__a / result__snippet classes, but real links are present.
+    const html = `
+      <div><a href="/internal">nav</a></div>
+      <a href="https://example.org/post">Interesting Post</a>
+      <a href="https://example.org/other">Another Result</a>`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(html)),
+    );
+
+    const out = await new WebSearchTool().run(
+      { query: 'anything' },
+      new AbortController().signal,
+      prompter,
+    );
+    expect(out).toContain('degraded results');
+    expect(out).toContain('https://example.org/post');
+    expect(out).toContain('Interesting Post');
+    // Relative nav anchors are dropped.
+    expect(out).not.toContain('/internal');
+  });
+
+  it('returns a structured failure instead of throwing when the search fetch fails', async () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND html.duckduckgo.com'), {
+      code: 'ENOTFOUND',
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('fetch failed', { cause });
+      }),
+    );
+
+    const out = await new WebSearchTool().run(
+      { query: 'whatever' },
+      new AbortController().signal,
+      prompter,
+    );
+    expect(out).toContain('ERROR: fetch failed');
+    expect(out).toContain('Code: ENOTFOUND');
   });
 });

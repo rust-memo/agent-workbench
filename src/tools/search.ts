@@ -116,26 +116,18 @@ export class GrepTool implements Tool {
 
     await gateSearchInputs(p, base, glob, signal);
 
-    const files = await globFiles(base, glob, 10_000, signal);
-
-    const out: string[] = [];
-    for (const file of files) {
-      if (signal.aborted) throw new Error('aborted');
-      let info: import('node:fs').Stats;
-      try {
-        info = await stat(file);
-      } catch {
-        continue;
-      }
-      if (info.isDirectory() || info.size > GREP_FILE_BYTE_CAP) continue;
-      await gateSensitivePath(p, file, 'search', signal);
-      const matches = await grepFile(file, re, limit - out.length, signal);
-      out.push(...matches);
-      if (out.length >= limit) break;
-    }
+    // Pull sizes from the glob pass (stats: true) instead of a second per-file
+    // stat, then grep with bounded concurrency. Output ordering stays
+    // deterministic: entries are sorted by path and results are reassembled in
+    // that order.
+    const entries = await globEntries(base, glob, 10_000, signal);
+    let out = await grepEntries(entries, re, limit, signal, p);
 
     if (out.length === 0) return 'no matches';
-    if (out.length >= limit) out.push(`[... limited to ${limit} matches ...]`);
+    if (out.length >= limit) {
+      out = out.slice(0, limit);
+      out.push(`[... limited to ${limit} matches ...]`);
+    }
     return out.join('\n');
   }
 }
@@ -171,6 +163,90 @@ async function globFiles(
     .slice(0, limit)
     .map((rel) => resolve(absBase, rel))
     .sort();
+}
+
+const GREP_CONCURRENCY = 8;
+
+interface GlobEntry {
+  path: string;
+  size: number;
+}
+
+/**
+ * Like globFiles but also returns each file's size (from fast-glob `stats:
+ * true`), so GrepTool can gate on size without a second stat() per file.
+ * Sorted by absolute path for deterministic downstream ordering.
+ */
+async function globEntries(
+  base: string,
+  pattern: string,
+  limit: number,
+  signal: AbortSignal,
+): Promise<GlobEntry[]> {
+  const absBase = resolve(base);
+  const info = await stat(absBase);
+
+  if (!info.isDirectory()) {
+    const dir = dirname(absBase);
+    const baseName = basename(absBase);
+    const matches = await fg(pattern, { cwd: dir, dot: true, onlyFiles: true });
+    if (!matches.some((m) => m === baseName || m.endsWith(`/${baseName}`))) return [];
+    return [{ path: absBase, size: info.size }];
+  }
+
+  const results = (await fg(pattern, {
+    cwd: absBase,
+    dot: true,
+    onlyFiles: true,
+    followSymbolicLinks: false,
+    suppressErrors: true,
+    stats: true,
+    ignore: Array.from(SKIP_DIR_NAMES).map((n) => `**/${n}/**`),
+  })) as unknown as Array<{ path: string; stats?: { size: number } }>;
+  if (signal.aborted) throw new Error('aborted');
+  return results
+    .slice(0, limit)
+    .map((e) => ({ path: resolve(absBase, e.path), size: e.stats?.size ?? 0 }))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+/**
+ * Grep `entries` with bounded concurrency, gating each file and skipping
+ * oversized ones. Workers stop pulling new files once `limit` matches have been
+ * collected (early exit). Per-file results are written by index and flattened
+ * in path order so output ordering is deterministic regardless of which worker
+ * finishes first.
+ */
+async function grepEntries(
+  entries: GlobEntry[],
+  re: RegExp,
+  limit: number,
+  signal: AbortSignal,
+  p: Prompter,
+): Promise<string[]> {
+  const results = new Array<string[]>(entries.length);
+  let matched = 0;
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = next;
+      next += 1;
+      if (i >= entries.length) return;
+      const entry = entries[i];
+      if (!entry || signal.aborted || matched >= limit || entry.size > GREP_FILE_BYTE_CAP) {
+        results[i] = [];
+        continue;
+      }
+      await gateSensitivePath(p, entry.path, 'search', signal);
+      const remaining = Math.max(0, limit - matched);
+      const m = await grepFile(entry.path, re, remaining, signal);
+      results[i] = m;
+      matched += m.length;
+    }
+  };
+  const pool = Array.from({ length: Math.min(GREP_CONCURRENCY, entries.length) }, worker);
+  await Promise.all(pool);
+  return results.flat();
 }
 
 async function gateSearchInputs(

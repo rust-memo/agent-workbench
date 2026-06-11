@@ -10,6 +10,7 @@ import type { ChatRequest } from './types.js';
 
 let server: Server;
 let baseURL = '';
+let lastBody: Record<string, unknown> | null = null;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -31,6 +32,34 @@ beforeAll(async () => {
         model: string;
         stream?: boolean;
       };
+      lastBody = body as Record<string, unknown>;
+
+      if (body.model === 'length-truncated') {
+        // Non-streaming response truncated at the token cap.
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            message: { role: 'assistant', content: 'partial' },
+            done: true,
+            done_reason: 'length',
+          }),
+        );
+        return;
+      }
+
+      if (body.model === 'streaming-length-truncated') {
+        // Streaming terminal chunk carries done_reason=length.
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+        res.write(`${JSON.stringify({ message: { role: 'assistant', content: 'half ' } })}\n`);
+        res.end(
+          `${JSON.stringify({
+            message: { role: 'assistant', content: 'answer' },
+            done: true,
+            done_reason: 'length',
+          })}\n`,
+        );
+        return;
+      }
 
       if (body.model === 'streaming-with-tool') {
         // Tool call delivered in a mid-stream chunk; final chunk carries done:true with empty content.
@@ -374,6 +403,62 @@ describe('OllamaClient', () => {
     expect(out.message.toolCalls?.[0]?.function.arguments).toBe(
       '{"url":"https://x.example.com/singular"}',
     );
+  });
+
+  it('sends a default num_ctx floor of 8192 when unconfigured', async () => {
+    const c = new OllamaClient(baseURL, 'qwen2.5:7b');
+    await c.chat({ model: 'qwen2.5:7b', messages: [{ role: 'user', content: 'hi' }] });
+    expect((lastBody?.options as { num_ctx?: number })?.num_ctx).toBe(8192);
+  });
+
+  it('sends a configured num_ctx (constructor or setNumCtx) verbatim', async () => {
+    const c = new OllamaClient(baseURL, 'qwen2.5:7b', 32768);
+    await c.chat({ model: 'qwen2.5:7b', messages: [{ role: 'user', content: 'hi' }] });
+    expect((lastBody?.options as { num_ctx?: number })?.num_ctx).toBe(32768);
+
+    c.setNumCtx(16384);
+    await c.chat({ model: 'qwen2.5:7b', messages: [{ role: 'user', content: 'hi' }] });
+    expect((lastBody?.options as { num_ctx?: number })?.num_ctx).toBe(16384);
+  });
+
+  it('forwards configured temperature and max_tokens as options', async () => {
+    const c = new OllamaClient(baseURL, 'qwen2.5:7b', undefined, {
+      temperature: 0.2,
+      maxTokens: 512,
+    });
+    await c.chat({ model: 'qwen2.5:7b', messages: [{ role: 'user', content: 'hi' }] });
+    const opts = lastBody?.options as { temperature?: number; num_predict?: number };
+    expect(opts?.temperature).toBe(0.2);
+    expect(opts?.num_predict).toBe(512);
+  });
+
+  it('omits temperature and num_predict when unconfigured', async () => {
+    const c = new OllamaClient(baseURL, 'qwen2.5:7b');
+    await c.chat({ model: 'qwen2.5:7b', messages: [{ role: 'user', content: 'hi' }] });
+    const opts = lastBody?.options as { temperature?: number; num_predict?: number };
+    expect(opts?.temperature).toBeUndefined();
+    expect(opts?.num_predict).toBeUndefined();
+  });
+
+  it('maps done_reason=length to a length finishReason (non-streaming)', async () => {
+    const c = new OllamaClient(baseURL, 'length-truncated');
+    const out = await c.chat({
+      model: 'length-truncated',
+      messages: [{ role: 'user', content: 'go' }],
+    });
+    expect(out.message.content).toBe('partial');
+    expect(out.finishReason).toBe('length');
+  });
+
+  it('maps done_reason=length to a length finishReason (streaming)', async () => {
+    const c = new OllamaClient(baseURL, 'streaming-length-truncated');
+    const deltas: string[] = [];
+    const out = await c.chatStream(
+      { model: 'streaming-length-truncated', messages: [{ role: 'user', content: 'go' }] },
+      (d) => deltas.push(d),
+    );
+    expect(deltas.join('')).toBe('half answer');
+    expect(out.finishReason).toBe('length');
   });
 
   it('ping succeeds against a live server', async () => {

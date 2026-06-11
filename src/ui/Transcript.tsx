@@ -97,11 +97,40 @@ function rowsForEntry(entry: TranscriptEntry): Row[] {
   return out;
 }
 
+// Lightweight rows for the actively-streaming entry. The append-delta
+// reducer creates a fresh entry object per token, so the WeakMap cache above
+// misses on every delta — running the regex-heavy renderMarkdown + cli-highlight
+// pipeline over the whole accumulated answer on every single token. The live
+// frame is transient (it's re-rendered as plain text on each tick anyway and
+// the full markdown render happens exactly once when the entry finalizes into
+// <Static>), so skip the pipeline here and just split into lines. Not cached:
+// the entry identity changes every token, so a cache would never hit.
+function plainRowsForEntry(entry: TranscriptEntry): Row[] {
+  const lines = entry.text.split('\n');
+  const out: Row[] = lines.map((line, j) => ({
+    kind: entry.kind,
+    text: line,
+    isFirst: j === 0,
+  }));
+  // Trailing spacer row between entries.
+  out.push({ kind: entry.kind, text: '', isFirst: false });
+  return out;
+}
+
 /** Render one transcript entry as a column of styled, prefixed rows.
- *  Used both inside the Static log and for the live streaming entry. */
-export function EntryView({ entry }: { entry: TranscriptEntry }): JSX.Element {
+ *  Used both inside the Static log and for the live streaming entry. When
+ *  `streaming` is set the markdown/highlight pipeline is skipped — the
+ *  live frame shows plain prefixed lines until the entry finalizes and is
+ *  committed to <Static>, where the full markdown render runs once. */
+export function EntryView({
+  entry,
+  streaming = false,
+}: {
+  entry: TranscriptEntry;
+  streaming?: boolean;
+}): JSX.Element {
   const s = ROLE_STYLES[entry.kind];
-  const rows = rowsForEntry(entry);
+  const rows = streaming ? plainRowsForEntry(entry) : rowsForEntry(entry);
   return (
     <Box flexDirection="column">
       {rows.map((row, j) => {

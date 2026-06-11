@@ -103,7 +103,9 @@ export class CaptureStore {
   private readonly endpoints: Map<string, EndpointRecord> = new Map();
   private readonly snapshots: SessionSnapshot[] = [];
   private readonly burpTasks: BurpTask[] = [];
-  private readonly burpIssues: BurpIssue[] = [];
+  // Keyed by issue id (insertion-ordered) so upsert is O(1) instead of an O(n)
+  // findIndex scan; iteration order still gives newest-last for listing.
+  private readonly burpIssues: Map<string, BurpIssue> = new Map();
   private readonly maxEntries: number;
   private nextSeq = 1;
   private lastActivityAt = 0;
@@ -158,6 +160,10 @@ export class CaptureStore {
       receivedAt: Date.now(),
     };
 
+    // delete+set so a re-seen id moves to the tail (most-recent) of the Map's
+    // insertion order. Otherwise re-setting keeps the original position and the
+    // LRU prune could evict a request that was just refreshed.
+    this.requests.delete(id);
     this.requests.set(id, entry);
     this.recordEndpoint(method, url, entry.requestBody, this.queryParams(url));
     this.pruneIfNeeded();
@@ -209,9 +215,12 @@ export class CaptureStore {
     const urlSubstr = filter?.urlSubstr?.toLowerCase();
     const method = filter?.method?.toUpperCase();
     const out: CapturedRequest[] = [];
-    // Iterate newest first.
-    const all = [...this.requests.values()].reverse();
-    for (const r of all) {
+    // Iterate newest-first by walking the values array backwards, instead of
+    // materializing a fully reversed copy, and stop as soon as `limit` is hit.
+    const values = [...this.requests.values()];
+    for (let i = values.length - 1; i >= 0; i -= 1) {
+      const r = values[i];
+      if (!r) continue;
       if (urlSubstr && !r.url.toLowerCase().includes(urlSubstr)) continue;
       if (method && r.method !== method) continue;
       out.push(r);
@@ -264,7 +273,7 @@ export class CaptureStore {
     this.endpoints.clear();
     this.snapshots.length = 0;
     this.burpTasks.length = 0;
-    this.burpIssues.length = 0;
+    this.burpIssues.clear();
   }
 
   ingestBurpTask(raw: unknown): { ok: boolean; reason?: string; task?: BurpTask } {
@@ -335,16 +344,23 @@ export class CaptureStore {
   }
 
   listBurpIssues(): BurpIssue[] {
-    return [...this.burpIssues].reverse();
+    return [...this.burpIssues.values()].reverse();
   }
 
   // ---- internals ----
 
   private upsertBurpIssue(issue: BurpIssue): void {
-    const idx = this.burpIssues.findIndex((i) => i.id === issue.id);
-    if (idx >= 0) this.burpIssues[idx] = issue;
-    else this.burpIssues.push(issue);
-    if (this.burpIssues.length > 1000) this.burpIssues.splice(0, this.burpIssues.length - 1000);
+    // Map.set updates in place for a known id (preserving order) or appends a
+    // new one — both O(1), no array scan.
+    this.burpIssues.set(issue.id, issue);
+    if (this.burpIssues.size > 1000) {
+      const drop = this.burpIssues.size - 1000;
+      let i = 0;
+      for (const k of this.burpIssues.keys()) {
+        if (i++ >= drop) break;
+        this.burpIssues.delete(k);
+      }
+    }
   }
 
   private recordEndpoint(

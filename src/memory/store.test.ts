@@ -57,6 +57,26 @@ describe('MemoryStore', () => {
     expect(hits[0]?.text).toContain('orders API IDOR');
   });
 
+  it('ranks a fresher fact above a slightly higher-overlap stale one', () => {
+    const s = store();
+    // Stale fact has an extra matching token ("boost") → higher raw overlap.
+    s.add({
+      text: 'idor orders boost stale',
+      description: 'idor orders',
+      createdAt: '2025-01-01T00:00:00.000Z',
+    });
+    // Fresh fact has lower raw overlap but is far more recent.
+    s.add({
+      text: 'idor orders fresh',
+      description: 'idor orders',
+      createdAt: '2026-06-10T00:00:00.000Z',
+    });
+    const hits = s.search('idor orders boost', 5);
+    // Recency boost lifts the fresher lesson to the top despite less overlap.
+    expect(hits[0]?.text).toContain('fresh');
+    expect(hits[0]?.text).not.toContain('boost');
+  });
+
   it('redacts secrets before persisting', () => {
     const s = store();
     const fact = s.add({

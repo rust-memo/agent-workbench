@@ -53,9 +53,12 @@ export async function listModels(
   const base = baseURL || DEFAULT_BASE_URL[b];
   if (!base) throw new Error(`${b} backend requires a base URL`);
 
-  const path = b === 'ollama' ? '/api/tags' : b === 'gemini' ? '/models' : '/models';
+  const path = b === 'ollama' ? '/api/tags' : '/models';
   const headers: Record<string, string> = {};
-  if (apiKey && b !== 'ollama' && b !== 'gemini') {
+  if (apiKey && b === 'gemini') {
+    // Gemini takes the key as a header, not a query param, so it stays out of logs.
+    headers['x-goog-api-key'] = apiKey;
+  } else if (apiKey && b !== 'ollama') {
     headers.Authorization = `Bearer ${apiKey}`;
   }
 
@@ -66,8 +69,7 @@ export async function listModels(
   const timer = setTimeout(() => ctl.abort(), DEFAULT_TIMEOUT_MS);
 
   try {
-    const suffix = b === 'gemini' ? `?key=${encodeURIComponent(apiKey)}` : '';
-    const resp = await fetch(`${base}${path}${suffix}`, {
+    const resp = await fetch(`${base}${path}`, {
       method: 'GET',
       headers,
       signal: ctl.signal,

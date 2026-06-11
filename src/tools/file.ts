@@ -3,7 +3,7 @@
 // frictionless. Writes and edits always require permission (handled by
 // the registry).
 
-import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, realpath, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { Prompter } from '../permission/permission.js';
@@ -115,12 +115,25 @@ export class FileReadTool implements Tool {
     // Read from the gate-resolved real path, not the lexical one (M1 TOCTOU).
     const real = await gateSensitivePath(p, abs, 'read', signal);
 
-    const buf = await readFile(real);
-    if (buf.byteLength > READ_BYTE_CAP) {
-      const head = decodeUtf8Capped(buf, READ_BYTE_CAP);
-      return `${head}\n[... truncated ${buf.byteLength - READ_BYTE_CAP} bytes ...]`;
+    // Read at most READ_BYTE_CAP bytes into a fixed buffer instead of pulling
+    // the whole file into RAM and slicing — a multi-GB file (or /dev/zero via a
+    // symlink) would otherwise OOM the process before the cap ever applied. The
+    // real size comes from fstat so the truncation note still reports it.
+    const fh = await open(real, 'r');
+    try {
+      const { size } = await fh.stat();
+      const toRead = Math.min(size, READ_BYTE_CAP);
+      const buf = Buffer.allocUnsafe(toRead);
+      const { bytesRead } = await fh.read(buf, 0, toRead, 0);
+      const slice = buf.subarray(0, bytesRead);
+      if (size > READ_BYTE_CAP) {
+        const head = decodeUtf8Capped(slice, READ_BYTE_CAP);
+        return `${head}\n[... truncated ${size - READ_BYTE_CAP} bytes ...]`;
+      }
+      return slice.toString('utf8');
+    } finally {
+      await fh.close();
     }
-    return buf.toString('utf8');
   }
 }
 

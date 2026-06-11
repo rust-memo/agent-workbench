@@ -79,6 +79,20 @@ describe('session.Store', () => {
     expect(loaded.memory?.findings).toContain('idor on /api/orders/1');
   });
 
+  it('writes compact JSON that still round-trips across many saves', async () => {
+    const store = Store.newWithID(tmp, newID());
+    // Several saves to exercise the periodic-fsync path.
+    for (let i = 0; i < 7; i += 1) {
+      await store.save([{ role: 'user', content: `msg ${i}` }], null);
+    }
+    const raw = readFileSync(store.path, 'utf8');
+    // Compact: no pretty-print indentation.
+    expect(raw).not.toContain('\n  "');
+    expect(raw.trimEnd().split('\n')).toHaveLength(1);
+    const loaded = store.load();
+    expect(loaded.messages[0]?.content).toBe('msg 6');
+  });
+
   it('saved file leaves no orphan .tmp', async () => {
     const store = Store.newWithID(tmp, newID());
     await store.save([{ role: 'user', content: 'x' }], null);

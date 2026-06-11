@@ -26,7 +26,10 @@ export function newFromConfig(cfg: Config): Client {
   switch (cfg.backend) {
     case 'ollama':
     case '':
-      return new OllamaClient(cfg.base_url, cfg.model);
+      // numCtx is undefined here; cli/index.ts applies the probed window via
+      // setNumCtx after startup. gen forwards the user's temperature/max_tokens
+      // so the local backend honors them like every hosted backend does.
+      return new OllamaClient(cfg.base_url, cfg.model, undefined, gen);
     case 'lmstudio':
       return OpenAIClient.lmStudio(cfg.base_url, cfg.model);
     case 'openai-compat':
@@ -95,6 +98,7 @@ export function newFromConfig(cfg: Config): Client {
         cfg.base_url || GEMINI_DEFAULT_BASE_URL,
         cfg.api_key,
         cfg.model || GEMINI_DEFAULT_MODEL,
+        gen,
       );
     default: {
       const _exhaustive: never = cfg.backend;

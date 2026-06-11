@@ -197,15 +197,33 @@ describe('ShellTool.run', () => {
 describe('ShellTool output cap', () => {
   it('bounds retained output to ~MAX_OUTPUT_BYTES even for huge streams', async () => {
     const t = new ShellTool();
-    // Emit ~1MB; the model should only ever see the 32KB head + truncation
-    // marker, and the process must not buffer the whole thing.
+    // Emit ~1MB; the model should only ever see the 64KB head+tail budget plus
+    // the truncation marker, and the process must not buffer the whole thing.
     const out = await t.run(
       { command: 'head -c 1000000 /dev/zero | tr "\\0" "a"' },
       new AbortController().signal,
       new AlwaysAllow(),
     );
     expect(out).toContain('truncated');
-    expect(out.length).toBeLessThan(64 * 1024);
+    // 64KB retained + small framing/marker; nowhere near the 1MB emitted.
+    expect(out.length).toBeLessThan(80 * 1024);
+  });
+
+  it('retains the tail of a large stream where scanner verdicts live', async () => {
+    const t = new ShellTool();
+    // A unique head marker, a large middle that gets elided, and a unique tail
+    // marker. The old head-only cap discarded the tail; both must now survive.
+    const out = await t.run(
+      {
+        command:
+          "printf 'HEAD_MARKER'; head -c 200000 /dev/zero | tr '\\0' 'a'; printf 'TAIL_VERDICT'",
+      },
+      new AbortController().signal,
+      new AlwaysAllow(),
+    );
+    expect(out).toContain('HEAD_MARKER');
+    expect(out).toContain('TAIL_VERDICT');
+    expect(out).toContain('truncated');
   });
 
   it('does not opt out of allow-session caching', () => {

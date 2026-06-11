@@ -7,18 +7,18 @@ import type { ChatRequest } from './types.js';
 let server: Server;
 let baseURL = '';
 let lastBody: Record<string, unknown> | null = null;
+let lastApiKeyHeader: string | undefined;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
-    if (req.method === 'GET' && req.url === '/v1beta/models?key=test-key') {
+    // The key must ride in the x-goog-api-key header, never the URL query.
+    lastApiKeyHeader = req.headers['x-goog-api-key'] as string | undefined;
+    if (req.method === 'GET' && req.url === '/v1beta/models') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ models: [] }));
       return;
     }
-    if (
-      req.method !== 'POST' ||
-      req.url !== '/v1beta/models/gemini-test:generateContent?key=test-key'
-    ) {
+    if (req.method !== 'POST' || req.url !== '/v1beta/models/gemini-test:generateContent') {
       res.writeHead(404);
       res.end();
       return;
@@ -98,6 +98,7 @@ describe('GeminiClient', () => {
 
     const out = await c.chat(req);
 
+    expect(lastApiKeyHeader).toBe('test-key');
     expect(out.message.content).toBe('working');
     expect(out.message.toolCalls?.[0]?.function.name).toBe('http');
     expect(out.message.toolCalls?.[0]?.function.arguments).toBe('{"url":"https://example.com"}');
@@ -116,6 +117,21 @@ describe('GeminiClient', () => {
       properties: { url: { type: 'STRING' } },
       required: ['url'],
     });
+  });
+
+  it('emits generationConfig from threaded temperature/max_tokens', async () => {
+    const c = new GeminiClient(baseURL, 'test-key', 'models/gemini-test', {
+      temperature: 0.4,
+      maxTokens: 512,
+    });
+    await c.chat({ model: 'models/gemini-test', messages: [{ role: 'user', content: 'hi' }] });
+    expect(lastBody?.generationConfig).toEqual({ temperature: 0.4, maxOutputTokens: 512 });
+  });
+
+  it('omits generationConfig when no gen opts are configured', async () => {
+    const c = new GeminiClient(baseURL, 'test-key', 'models/gemini-test');
+    await c.chat({ model: 'models/gemini-test', messages: [{ role: 'user', content: 'hi' }] });
+    expect(lastBody?.generationConfig).toBeUndefined();
   });
 
   it('pings the model list endpoint', async () => {

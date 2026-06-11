@@ -12,6 +12,7 @@ let server: Server;
 let baseURL = '';
 let lastBody: Record<string, unknown> | null = null;
 let lastHeaders: Record<string, string | string[] | undefined> | null = null;
+let proxyRateLimitCalls = 0;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -67,6 +68,15 @@ beforeAll(async () => {
           res.end();
           return;
         }
+        if (body.model === 'partial-stop-eos') {
+          // A partial stop token at the very end that never completes — it must
+          // be flushed (it was real text, not a leaked role marker).
+          send({ choices: [{ delta: { content: 'Hello <|us' } }] });
+          send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
         if (body.model === 'reasoning-stream') {
           // Reasoning model: chain-of-thought streams first, then the answer.
           send({ choices: [{ delta: { reasoning_content: 'Let me think… ' } }] });
@@ -112,6 +122,23 @@ beforeAll(async () => {
       }
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (body.model === 'proxy-200-ratelimit') {
+        // Proxy surfaces a transient rate limit inside an HTTP 200 on the first
+        // call, then succeeds — exercises the retryable-200-body path.
+        proxyRateLimitCalls += 1;
+        if (proxyRateLimitCalls === 1) {
+          res.end(JSON.stringify({ error: { message: 'Rate limit exceeded, please retry' } }));
+        } else {
+          res.end(
+            JSON.stringify({
+              choices: [
+                { message: { role: 'assistant', content: 'recovered' }, finish_reason: 'stop' },
+              ],
+            }),
+          );
+        }
+        return;
+      }
       if (body.model === 'glm-leak') {
         res.end(
           JSON.stringify({
@@ -203,6 +230,29 @@ describe('OpenAIClient', () => {
     expect(out.message.toolCalls?.[0]?.function.name).toBe('http');
     expect(out.message.toolCalls?.[0]?.function.arguments).toBe('{"url":"https://x.example.com"}');
     expect(out.finishReason).toBe('tool_calls');
+  });
+
+  it('flushes a withheld partial stop token when the stream ends without completing it', async () => {
+    const c = OpenAIClient.lmStudio(baseURL, 'partial-stop-eos');
+    const deltas: string[] = [];
+    const out = await c.chatStream(
+      { model: 'partial-stop-eos', messages: [{ role: 'user', content: 'hi' }] },
+      (d) => deltas.push(d),
+    );
+    // "<|us" looked like the head of <|user|> mid-stream so it was withheld,
+    // but the stream ended — so it's emitted verbatim rather than dropped.
+    expect(deltas.join('')).toBe('Hello <|us');
+    expect(out.message.content).toBe('Hello <|us');
+  });
+
+  it('retries a proxy that returns a transient rate limit inside a 200 body', async () => {
+    const c = new OpenAIClient(baseURL, 'sk', 'proxy-200-ratelimit', 'openrouter');
+    const out = await c.chat({
+      model: 'proxy-200-ratelimit',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(out.message.content).toBe('recovered');
+    expect(proxyRateLimitCalls).toBe(2);
   });
 
   it('lmStudio factory uses the right default URL', () => {

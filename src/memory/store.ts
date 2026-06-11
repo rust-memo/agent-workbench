@@ -13,11 +13,26 @@
 // rides in the system prompt on every request (survives compaction) and
 // search() recalls the full matching facts into each turn's context.
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import matter from 'gray-matter';
 import { apply as redact } from '../redact/index.js';
+
+// Recency boost: at equal token overlap a fresher fact outranks a stale one by
+// up to RECENCY_BOOST (decaying with age), so recent lessons surface first.
+const RECENCY_BOOST = 0.25;
+const RECENCY_HALF_LIFE_MS = 14 * 24 * 60 * 60 * 1000;
 
 export type MemoryScope = 'project' | 'personal';
 export type MemoryType = 'target' | 'technique' | 'preference' | 'reference' | 'note';
@@ -58,6 +73,12 @@ export interface MemoryStoreOptions {
 export class MemoryStore {
   readonly projectDir: string;
   readonly personalDir: string;
+  // Per-scope read cache keyed on the directory's mtimeMs. readScope() runs on
+  // every list()/index()/search() (and index()+search() run each agent turn),
+  // re-parsing up to MAX_FACTS_PER_SCOPE markdown files; caching collapses that
+  // to one parse until the directory changes. Writes invalidate explicitly,
+  // since dir-mtime resolution can be too coarse to notice a same-tick change.
+  private readonly scopeCache = new Map<MemoryScope, { mtimeMs: number; facts: MemoryFact[] }>();
 
   constructor(opts: MemoryStoreOptions = {}) {
     const cwd = resolve(opts.cwd ?? process.cwd());
@@ -94,10 +115,16 @@ export class MemoryStore {
     const name = this.uniqueName(dir, slugify(description) || 'note');
     const file = join(dir, `${name}.md`);
     const content = matter.stringify(`${text}\n`, { name, description, type, createdAt });
-    writeFileSync(file, content, { mode: 0o600 });
+    // Atomic write: tmp + rename so a crash mid-write can't corrupt or truncate
+    // the only copy of the fact (matches the session/config store pattern).
+    atomicWriteFileSync(file, content);
 
     const fact: MemoryFact = { name, description, type, scope, text, createdAt, file };
-    this.pruneScope(scope);
+    // Re-read the scope once (the new file is now on disk) and reuse that single
+    // snapshot for both prune and index instead of reading it twice.
+    this.invalidate(scope);
+    const snapshot = this.readScope(scope);
+    if (this.pruneScope(scope, snapshot)) this.invalidate(scope);
     this.writeIndex(scope);
     return fact;
   }
@@ -122,7 +149,10 @@ export class MemoryStore {
           }
         }
       }
-      if (changed) this.writeIndex(scope);
+      if (changed) {
+        this.invalidate(scope);
+        this.writeIndex(scope);
+      }
     }
     return removed;
   }
@@ -144,10 +174,18 @@ export class MemoryStore {
   search(query: string, limit = 5): MemoryFact[] {
     const tokens = tokenize(query);
     if (tokens.length === 0) return [];
+    const facts = this.list();
+    // Reference point for the recency boost: the freshest fact in the corpus, so
+    // ranking stays deterministic regardless of wall-clock time.
+    let refMs = 0;
+    for (const fact of facts) {
+      const t = Date.parse(fact.createdAt);
+      if (Number.isFinite(t) && t > refMs) refMs = t;
+    }
     const scored: Array<{ fact: MemoryFact; score: number }> = [];
-    for (const fact of this.list()) {
-      const score = scoreFact(fact, tokens);
-      if (score > 0) scored.push({ fact, score });
+    for (const fact of facts) {
+      const base = scoreFact(fact, tokens);
+      if (base > 0) scored.push({ fact, score: base * recencyMultiplier(fact.createdAt, refMs) });
     }
     return scored
       .sort((a, b) => b.score - a.score || b.fact.createdAt.localeCompare(a.fact.createdAt))
@@ -155,9 +193,28 @@ export class MemoryStore {
       .map((s) => s.fact);
   }
 
+  /** Drop the cached snapshot for a scope after a write touches its files. */
+  private invalidate(scope: MemoryScope): void {
+    this.scopeCache.delete(scope);
+  }
+
   private readScope(scope: MemoryScope): MemoryFact[] {
     const dir = this.dir(scope);
     if (!existsSync(dir)) return [];
+    let mtimeMs: number;
+    try {
+      mtimeMs = statSync(dir).mtimeMs;
+    } catch {
+      return [];
+    }
+    const cached = this.scopeCache.get(scope);
+    if (cached && cached.mtimeMs === mtimeMs) return cached.facts;
+    const facts = this.loadScope(dir, scope);
+    this.scopeCache.set(scope, { mtimeMs, facts });
+    return facts;
+  }
+
+  private loadScope(dir: string, scope: MemoryScope): MemoryFact[] {
     let names: string[];
     try {
       names = readdirSync(dir).filter((n) => n.endsWith('.md') && n !== 'MEMORY.md');
@@ -194,7 +251,8 @@ export class MemoryStore {
   /** Regenerate the human-readable MEMORY.md index for a scope. */
   private writeIndex(scope: MemoryScope): void {
     const dir = this.dir(scope);
-    const facts = this.readScope(scope).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    // Copy before sorting so we don't mutate the cached snapshot's order.
+    const facts = [...this.readScope(scope)].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     const path = join(dir, 'MEMORY.md');
     if (facts.length === 0) {
       rmSync(path, { force: true });
@@ -215,14 +273,20 @@ export class MemoryStore {
     }
   }
 
-  /** Cap a scope to the most recent MAX_FACTS_PER_SCOPE files. */
-  private pruneScope(scope: MemoryScope): void {
-    const facts = this.readScope(scope).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  /**
+   * Cap a scope to the most recent MAX_FACTS_PER_SCOPE files. Accepts a snapshot
+   * to avoid re-reading; returns true when it removed any file (so the caller
+   * can invalidate the cache).
+   */
+  private pruneScope(scope: MemoryScope, snapshot = this.readScope(scope)): boolean {
+    const facts = [...snapshot].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     const excess = facts.length - MAX_FACTS_PER_SCOPE;
+    if (excess <= 0) return false;
     for (let i = 0; i < excess; i += 1) {
       const f = facts[i];
       if (f) rmSync(f.file, { force: true });
     }
+    return true;
   }
 
   private uniqueName(dir: string, base: string): string {
@@ -246,6 +310,30 @@ export function formatMemoryRecall(facts: MemoryFact[]): string {
     out.push('', `## ${f.name} (${f.type})`, f.text);
   }
   return out.join('\n');
+}
+
+/** Crash-safe synchronous write: stage in a sibling tmp, then atomic rename. */
+function atomicWriteFileSync(file: string, content: string): void {
+  const tmp = `${file}.tmp.${randomBytes(3).toString('hex')}`;
+  try {
+    writeFileSync(tmp, content, { mode: 0o600 });
+    renameSync(tmp, file);
+  } catch (err) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
+}
+
+/** 1 → 1+RECENCY_BOOST as a fact approaches `refMs`, decaying with age. */
+function recencyMultiplier(createdAt: string, refMs: number): number {
+  const t = Date.parse(createdAt);
+  if (!Number.isFinite(t) || refMs <= 0) return 1;
+  const age = Math.max(0, refMs - t);
+  return 1 + RECENCY_BOOST * 2 ** (-age / RECENCY_HALF_LIFE_MS);
 }
 
 function firstLine(text: string): string {

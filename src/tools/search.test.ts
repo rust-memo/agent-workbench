@@ -112,4 +112,37 @@ describe('GrepTool', () => {
     expect(out).toContain('main.go');
     expect(out).toContain('package main');
   });
+
+  it('caps matches at limit and notes the limit (deterministic across many files)', async () => {
+    const dir = join(tmp, 'many');
+    mkdirSync(dir, { recursive: true });
+    for (let i = 0; i < 50; i++) {
+      writeFileSync(join(dir, `f${String(i).padStart(3, '0')}.txt`), 'needle here\n');
+    }
+    const out = await new GrepTool().run(
+      { pattern: 'needle', path: dir, glob: '**/*.txt', limit: 10 },
+      signal,
+      new AlwaysAllow(),
+    );
+    const lines = out.split('\n');
+    expect(lines).toContain('[... limited to 10 matches ...]');
+    // 10 matches + the limit note line.
+    expect(lines.filter((l) => l.includes('needle')).length).toBe(10);
+  });
+
+  it('finds matches across many files in a directory', async () => {
+    const dir = join(tmp, 'spread');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'a.txt'), 'alpha TARGET\n');
+    writeFileSync(join(dir, 'b.txt'), 'beta\n');
+    writeFileSync(join(dir, 'c.txt'), 'gamma TARGET\n');
+    const out = await new GrepTool().run(
+      { pattern: 'TARGET', path: dir, glob: '**/*.txt' },
+      signal,
+      new AlwaysAllow(),
+    );
+    expect(out).toContain('a.txt');
+    expect(out).toContain('c.txt');
+    expect(out).not.toContain('b.txt');
+  });
 });
