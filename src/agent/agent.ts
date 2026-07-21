@@ -17,7 +17,7 @@ import {
 } from '../memory/store.js';
 import type { Prompter } from '../permission/permission.js';
 import { redact } from '../redact/index.js';
-import type { SessionMemory, Store } from '../session/store.js';
+import type { SessionMemory, SessionStore } from '../session/store.js';
 import { type Registry as SkillRegistry, materializeSkillBody } from '../skills/registry.js';
 import type { Target } from '../target/target.js';
 import { canonicalToolName } from '../tools/aliases.js';
@@ -41,7 +41,7 @@ export interface AgentOptions {
   tools: ToolRegistry;
   skills: SkillRegistry;
   prompter: Prompter;
-  store: Store | null;
+  store: SessionStore | null;
   target: Target;
   thinkingEnabled?: boolean;
   maxSteps?: number;
@@ -144,7 +144,7 @@ export class Agent {
   readonly tools: ToolRegistry;
   readonly skills: SkillRegistry;
   readonly prompter: Prompter;
-  readonly store: Store | null;
+  readonly store: SessionStore | null;
   readonly target: Target;
   readonly intelligence: IntelligenceStore | null;
   readonly memoryStore: MemoryStore | null;

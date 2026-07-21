@@ -1,21 +1,27 @@
 {
   "name": "@pentesterflow/agent",
-  "version": "0.1.0-dev",
-  "description": "Agentic offensive-security CLI for security engineers, professional penetration testers, and bug hunters.",
+  "version": "0.2.0",
+  "description": "Local AI security workbench and pentesting CLI with scoped recon, auditable artifacts, and multiple AI providers.",
   "type": "module",
   "bin": {
     "pentesterflow": "./dist/cli.js",
-    "pentesterflow-browser-mcp": "./dist/browser-mcp.js"
+    "pentesterflow-browser-mcp": "./dist/browser-mcp.js",
+    "pentesterflow-web": "./dist/web.js"
   },
   "files": [
     "dist",
+    "web-ui/dist",
     "skills",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "npm run build:server && npm run build:web-ui",
+    "build:server": "tsup",
+    "build:web-ui": "vite build --config web-ui/vite.config.ts",
     "dev": "tsx src/cli/index.ts",
+    "dev:web": "tsx src/web/index.ts",
+    "start:web": "node dist/web.js",
     "dev:burp": "tsx src/cli/index.ts --burp",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -32,48 +38,64 @@
     "agent",
     "llm",
     "ollama",
+    "qwen",
+    "opencode",
+    "web-ui",
+    "recon",
     "mcp",
     "offensive-security",
     "red-team"
   ],
   "license": "Apache-2.0",
-  "homepage": "https://github.com/pentesterflow/agent",
+  "homepage": "https://github.com/rust-memo/agent-workbench",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pentesterflow/agent.git"
+    "url": "https://github.com/rust-memo/agent-workbench.git"
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.11",
+    "esbuild": "0.28.1"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "chalk": "^5.6.2",
     "cli-highlight": "^2.1.11",
     "execa": "^9.5.1",
+    "express": "^5.2.1",
     "fast-glob": "^3.3.2",
     "gray-matter": "^4.0.3",
+    "helmet": "^8.1.0",
     "ink": "^5.0.1",
     "ink-spinner": "^5.0.0",
     "marked": "^14.1.4",
     "marked-terminal": "^7.2.1",
     "pino": "^9.5.0",
     "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "undici": "^6.21.0",
     "write-file-atomic": "^6.0.0",
+    "ws": "^8.18.3",
     "zod": "^3.23.8",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
+    "@types/express": "^5.0.5",
     "@types/marked-terminal": "^6.1.1",
     "@types/node": "^22.10.1",
     "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.7",
+    "@types/ws": "^8.18.1",
     "@types/write-file-atomic": "^4.0.3",
     "ink-testing-library": "^4.0.0",
     "react-devtools-core": "^4.28.5",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vite": "^7.3.1",
+    "vitest": "^4.1.10"
   }
 }

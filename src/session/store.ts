@@ -82,14 +82,29 @@ export function dirFromPath(path: string): string {
   return dirname(path);
 }
 
-// ---------- Store ----------
+// ---------- Store contract ----------
+
+/**
+ * Persistence boundary shared by the agent runtime. The CLI deliberately uses
+ * JsonSessionStore; the Web control plane uses its own SQLite implementation.
+ * A running session has exactly one store and is never mirrored between both.
+ */
+export interface SessionStore {
+  readonly id: string;
+  load(): { messages: Message[]; target: Target | null; memory: SessionMemory | null };
+  save(messages: Message[], target: Target | null, memory?: SessionMemory | null): Promise<void>;
+  clear(): Promise<void>;
+  saveContextSnapshot(markdown: string): Promise<string>;
+}
+
+// ---------- JSON CLI store ----------
 
 // fsync every Nth save (and always the first). The atomic tmp+rename already
 // keeps the file consistent between syncs; this trims an fsync off most saves on
 // the hot autosave path while still flushing to durable storage periodically.
 const FSYNC_EVERY = 5;
 
-export class Store {
+export class JsonSessionStore implements SessionStore {
   readonly path: string;
   readonly id: string;
   private saveCount = 0;
@@ -99,8 +114,8 @@ export class Store {
     this.id = id;
   }
 
-  static newWithID(dir: string, id: string): Store {
-    return new Store(join(dir, `${id}.json`), id);
+  static newWithID(dir: string, id: string): JsonSessionStore {
+    return new JsonSessionStore(join(dir, `${id}.json`), id);
   }
 
   contextSnapshotPath(): string {
@@ -213,6 +228,9 @@ export class Store {
     }
   }
 }
+
+/** Backward-compatible CLI name. New code should use JsonSessionStore. */
+export { JsonSessionStore as Store };
 
 // ---------- Maintenance ----------
 

@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" alt="PentesterFlow" width="520" />
 
-### Human-in-the-loop Agentic AI CLI for penetration testers and bug hunters.
+### Local AI security workbench and human-in-the-loop pentesting CLI.
 
 PentesterFlow helps security engineers move through recon, enumeration,
 validation, evidence collection, and reporting while keeping the analyst in
@@ -10,13 +10,13 @@ control.
 
 <br/>
 
-[![build](https://img.shields.io/github/actions/workflow/status/PentesterFlow/agent/ci.yml?branch=main&label=build&logo=github)](https://github.com/PentesterFlow/agent/actions)
-[![release](https://img.shields.io/github/v/release/PentesterFlow/agent?include_prereleases&logo=github)](https://github.com/PentesterFlow/agent/releases)
+[![build](https://img.shields.io/github/actions/workflow/status/rust-memo/agent-workbench/ci.yml?branch=main&label=build&logo=github)](https://github.com/rust-memo/agent-workbench/actions)
+[![release](https://img.shields.io/github/v/release/rust-memo/agent-workbench?include_prereleases&logo=github)](https://github.com/rust-memo/agent-workbench/releases)
 [![node](https://img.shields.io/badge/node-20%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![license: Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![stars](https://img.shields.io/github/stars/PentesterFlow/agent?style=social)](https://github.com/PentesterFlow/agent/stargazers)
+[![stars](https://img.shields.io/github/stars/rust-memo/agent-workbench?style=social)](https://github.com/rust-memo/agent-workbench/stargazers)
 
-**[Install](#install) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Burp](#burp-integration) · [Security](#security-model)**
+**[Install](#install) · [Web Workbench](#local-web-workbench-v020) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
 
 </div>
 
@@ -45,11 +45,13 @@ $ pentesterflow
 
 ## Overview
 
-PentesterFlow is an open-source terminal assistant designed specifically for
-authorized offensive-security work. It connects to local or hosted LLMs, plans
+Agent Workbench is a local-first extension of the open-source PentesterFlow
+terminal assistant, designed specifically for authorized offensive-security
+work. It connects to local or hosted LLMs, plans
 against a scoped target, uses real pentesting tools, asks for approval before
 sensitive actions, remembers useful lessons across sessions, and writes
-evidence-backed findings.
+evidence-backed findings. This fork adds a browser workbench while retaining
+the existing PentesterFlow CLI and acknowledging the upstream project.
 
 It is built around three ideas:
 
@@ -99,23 +101,23 @@ published SHA-256 checksum when available.
 
 ```sh
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/PentesterFlow/agent/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh | sh
 ```
 
 ```powershell
 # Windows PowerShell
-irm https://raw.githubusercontent.com/PentesterFlow/agent/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.ps1 | iex
 ```
 
 Pin a release or choose an install directory:
 
 ```sh
-PENTESTERFLOW_VERSION=v0.1.6 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
-  sh -c "$(curl -fsSL https://raw.githubusercontent.com/PentesterFlow/agent/main/install.sh)"
+PENTESTERFLOW_VERSION=v0.2.0 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh)"
 ```
 
 Download binaries directly from
-[GitHub Releases](https://github.com/PentesterFlow/agent/releases):
+[GitHub Releases](https://github.com/rust-memo/agent-workbench/releases):
 
 | OS | Assets |
 |---|---|
@@ -150,6 +152,65 @@ pentesterflow --resume <session-id>
 
 On resume, PentesterFlow automatically shows a recap of the previous session's
 persistent memory so you can continue without manually reconstructing context.
+
+## Local Web Workbench (v0.2.0)
+
+The Web workbench keeps the existing CLI intact and adds an English-only,
+terminal-style local interface. Web sessions use SQLite as their only source of
+truth; CLI sessions continue to use the existing JSON store. There is no live
+JSON/SQLite synchronization.
+
+Requirements for the Web server:
+
+- Node.js 22 or newer (the CLI remains compatible with Node.js 20).
+- At least one provider: Ollama, Qwen Code, or OpenCode.
+- `subfinder` and ProjectDiscovery `httpx` on the host for Recon actions.
+
+```sh
+npm install
+npm run build
+npm run start:web
+```
+
+The server binds only to:
+
+```text
+http://127.0.0.1:9099
+```
+
+Open the single-use pairing URL printed in the terminal. The fragment is
+exchanged for an HttpOnly, SameSite=Strict session cookie and is removed from
+the browser address bar immediately.
+
+v0.2.0 includes Plan and low-impact Recon modes, an Ollama/Qwen Code/OpenCode
+provider and model switcher, Subfinder, HTTPX,
+SQLite event replay, cancellation, and hash-addressed artifacts. Scanner
+actions use server-defined argument arrays without a shell. Scope enforcement
+is fail-closed for action inputs and best-effort at the network layer; it is not
+claimed to be complete egress isolation. Out-of-scope discoveries are retained
+and classified but are never placed into the active-action queue.
+
+Configuration:
+
+```sh
+PENTESTERFLOW_WEB_PORT=9099 \
+PENTESTERFLOW_OLLAMA_URL=http://127.0.0.1:11434 \
+PENTESTERFLOW_OLLAMA_MODEL=qwen3:8b \
+npm run start:web
+```
+
+Qwen Code is launched with `--safe-mode`, sandboxing, structured JSON output,
+and an empty temporary working directory. OpenCode is loaded from
+`~/.opencode/bin/opencode` by default and runs with `--pure --agent plan` in an
+empty temporary directory. Prompt payloads are kept out of process arguments.
+Both CLI providers require an explicit browser confirmation before every turn
+because their configured models may be remote. Override the server-owned paths
+only at startup with `PENTESTERFLOW_QWEN_PATH` or
+`PENTESTERFLOW_OPENCODE_PATH`.
+
+Web data is stored under `.pentesterflow/web/` and is intentionally ignored by
+Git. Raw artifacts are kept until manually deleted. Preview is redacted by
+default; opening or downloading raw evidence creates an audit record.
 
 ## Providers
 
@@ -518,8 +579,8 @@ skills should include a `SKILL.md` and pass the skill conformance tests.
 <div align="center">
 <br/>
 
-**[Report an issue](https://github.com/PentesterFlow/agent/issues)** ·
-**[Request a feature](https://github.com/PentesterFlow/agent/issues/new)** ·
-**[Releases](https://github.com/PentesterFlow/agent/releases)**
+**[Report an issue](https://github.com/rust-memo/agent-workbench/issues)** ·
+**[Request a feature](https://github.com/rust-memo/agent-workbench/issues/new)** ·
+**[Releases](https://github.com/rust-memo/agent-workbench/releases)**
 
 </div>

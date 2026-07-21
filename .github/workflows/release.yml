@@ -1,24 +1,20 @@
 name: release
 
-# Cut a versioned release by pushing a version tag (e.g. `v0.1.0`).
-# Every push to main also creates the next patch release (e.g. `v0.1.1`)
-# with generated release notes, so installers and `/update latest` pick up
-# a numbered release with a changelog.
-# Can also be run from the Actions tab (workflow_dispatch) for a dry-run rebuild.
+# Cut a versioned release only by pushing a version tag (e.g. `v0.2.0`).
+# This keeps ordinary main-branch pushes from creating accidental releases.
+# It can also run from the Actions tab for a dry-run rebuild.
 #
 # Pipeline: verify (full CI) -> cross-platform standalone binaries (Bun) ->
 # GitHub Release with SHA256SUMS + auto-generated notes -> npm publish
 # (tag pushes only, when an NPM_TOKEN secret is configured).
 on:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version to release against (e.g. v0.1.0)'
+        description: 'Tag/version to release against (e.g. v0.2.0)'
         required: true
 
 permissions:
@@ -47,21 +43,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${GITHUB_REF}" == refs/heads/main ]]; then
-            git fetch --tags --force
-            latest="$(
-              git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
-              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
-              head -n 1 ||
-              true
-            )"
-            if [[ -z "${latest}" ]]; then
-              latest="v0.1.0"
-            fi
-            IFS=. read -r major minor patch <<< "${latest#v}"
-            release_tag="v${major}.${minor}.$((patch + 1))"
-            should_publish_release="true"
-          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             release_tag="${GITHUB_REF_NAME}"
             should_publish_release="true"
           else
@@ -152,13 +134,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Create numbered release tag
-        if: github.ref == 'refs/heads/main'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "${{ needs.prepare.outputs.release_tag }}" "${GITHUB_SHA}"
-          git push origin "refs/tags/${{ needs.prepare.outputs.release_tag }}"
       - uses: actions/download-artifact@v4
         with:
           path: dist-bin
