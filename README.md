@@ -112,7 +112,7 @@ irm https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.ps1
 Pin a release or choose an install directory:
 
 ```sh
-PENTESTERFLOW_VERSION=v0.2.1 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
+PENTESTERFLOW_VERSION=v0.2.2 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh)"
 ```
 
@@ -153,7 +153,7 @@ pentesterflow --resume <session-id>
 On resume, PentesterFlow automatically shows a recap of the previous session's
 persistent memory so you can continue without manually reconstructing context.
 
-## Local Web Workbench (v0.2.1)
+## Local Web Workbench (v0.2.2)
 
 The Web workbench keeps the existing CLI intact and adds an English-only,
 terminal-style local interface. Web sessions use SQLite as their only source of
@@ -182,7 +182,7 @@ Open the single-use pairing URL printed in the terminal. The fragment is
 exchanged for an HttpOnly, SameSite=Strict session cookie and is removed from
 the browser address bar immediately.
 
-v0.2.1 includes general assistance, Plan and low-impact Recon modes, an
+v0.2.2 includes general assistance, Plan and low-impact Recon modes, an
 Ollama/Qwen Code/OpenCode/OpenClaude provider and checked-model switcher,
 Subfinder, HTTPX,
 SQLite event replay, cancellation, and hash-addressed artifacts. Scanner
@@ -190,6 +190,19 @@ actions use server-defined argument arrays without a shell. Scope enforcement
 is fail-closed for action inputs and best-effort at the network layer; it is not
 claimed to be complete egress isolation. Out-of-scope discoveries are retained
 and classified but are never placed into the active-action queue.
+
+Type `/` in the Web composer to open the terminal-style command menu. Web-safe
+implementations include `/help`, `/provider`, `/model`, `/plan`, `/next`,
+`/target`, `/compact`, `/memory`, `/snapshot`, `/skills`, `/maxsteps`,
+`/thinking`, `/reset`, and `/clear`. Commands such as `/update`, `/burp`,
+`/yolo`, and `/exit` are recognized but keep their privileged operation in the
+trusted terminal. Slash commands are parsed as typed backend actions and never
+as shell text.
+
+Cancellation now records an immediate `turn.cancel-requested` event and kills
+the complete CLI-provider process group, including provider launchers that
+spawn child processes. A short forced-kill fallback prevents stuck turns while
+the final `turn.finished` event records `cancelled` deterministically.
 
 Configuration:
 

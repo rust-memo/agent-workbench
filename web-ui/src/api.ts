@@ -2,7 +2,11 @@ export interface Engagement {
   id: string;
   name: string;
   mode: 'PLAN' | 'RECON';
-  scope: { allowedHosts: string[]; allowThirdPartyPassiveSources: boolean; allowDirectLowImpactRecon: boolean };
+  scope: {
+    allowedHosts: string[];
+    allowThirdPartyPassiveSources: boolean;
+    allowDirectLowImpactRecon: boolean;
+  };
 }
 export interface Session {
   id: string;
@@ -40,6 +44,11 @@ export interface RuntimeEvent {
   payload: Record<string, unknown>;
   createdAt: string;
 }
+export interface SlashCommand {
+  name: string;
+  args?: string;
+  description: string;
+}
 export interface Artifact {
   id: string;
   sessionId: string;
@@ -53,7 +62,9 @@ export interface Artifact {
 
 let csrfToken = '';
 
-export function setCsrf(value: string): void { csrfToken = value; }
+export function setCsrf(value: string): void {
+  csrfToken = value;
+}
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = init.method ?? 'GET';
@@ -61,8 +72,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body) headers.set('Content-Type', 'application/json');
   if (!['GET', 'HEAD'].includes(method)) headers.set('X-CSRF-Token', csrfToken);
   const response = await fetch(`/api/v1${path}`, { ...init, headers, credentials: 'same-origin' });
-  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-  if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : `Request failed (${response.status})`);
+  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok)
+    throw new Error(
+      typeof body.error === 'string' ? body.error : `Request failed (${response.status})`,
+    );
   return body as T;
 }
 
@@ -71,9 +85,13 @@ export async function pairFromFragment(): Promise<boolean> {
   const token = params.get('pair');
   if (!token) return false;
   try {
-    const response = await fetch('/api/v1/auth/pair', { method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
-    const body = await response.json() as { csrfToken?: string };
+    const response = await fetch('/api/v1/auth/pair', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const body = (await response.json()) as { csrfToken?: string };
     if (!response.ok || !body.csrfToken) throw new Error('Pairing failed');
     setCsrf(body.csrfToken);
     return true;
@@ -87,5 +105,7 @@ export async function restoreSession(): Promise<boolean> {
     const response = await api<{ csrfToken: string }>('/auth/session');
     setCsrf(response.csrfToken);
     return true;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }

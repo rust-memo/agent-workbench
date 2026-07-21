@@ -66,6 +66,64 @@ abstract class StructuredCliClient implements Client {
   }
 }
 
+interface CliInvocationOptions {
+  cwd: string;
+  input?: string;
+  signal?: AbortSignal;
+  env: NodeJS.ProcessEnv;
+}
+
+/**
+ * Run a CLI provider in its own process group. Some provider launchers spawn a
+ * second Node process and wait for it (OpenClaude does this to set heap flags).
+ * Killing only the launcher leaves that child holding stdout open, so the Web
+ * turn appears to ignore cancellation. On POSIX we terminate the whole group,
+ * then force-kill any survivor after a short grace period.
+ */
+async function runCliProvider(binary: string, args: string[], options: CliInvocationOptions) {
+  const detached = process.platform !== 'win32';
+  const subprocess = execa(binary, args, {
+    cwd: options.cwd,
+    input: options.input,
+    cancelSignal: options.signal,
+    timeout: 10 * 60_000,
+    maxBuffer: 2 * 1024 * 1024,
+    reject: false,
+    extendEnv: false,
+    env: options.env,
+    detached,
+    forceKillAfterDelay: 1_500,
+  });
+  const pid = subprocess.pid;
+  const terminateTree = (): void => {
+    if (!pid) return;
+    if (detached) {
+      try {
+        process.kill(-pid, 'SIGTERM');
+      } catch {
+        return;
+      }
+      const force = setTimeout(() => {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          // The group exited during the grace period.
+        }
+      }, 1_500);
+      force.unref();
+      return;
+    }
+    subprocess.kill('SIGTERM');
+  };
+  if (options.signal?.aborted) terminateTree();
+  else options.signal?.addEventListener('abort', terminateTree, { once: true });
+  try {
+    return await subprocess;
+  } finally {
+    options.signal?.removeEventListener('abort', terminateTree);
+  }
+}
+
 export class QwenCliClient extends StructuredCliClient {
   name(): string {
     return 'qwen';
@@ -75,14 +133,10 @@ export class QwenCliClient extends StructuredCliClient {
     const args = ['--safe-mode', '--sandbox', '--output-format', 'json'];
     if (this.modelID && this.modelID !== 'default') args.push('--model', this.modelID);
     args.push('--prompt', '');
-    const result = await execa(this.binary, args, {
+    const result = await runCliProvider(this.binary, args, {
       cwd,
       input: prompt,
-      cancelSignal: signal,
-      timeout: 10 * 60_000,
-      maxBuffer: 2 * 1024 * 1024,
-      reject: false,
-      extendEnv: false,
+      signal,
       env: this.environment(),
     });
     if (result.exitCode !== 0)
@@ -122,13 +176,9 @@ export class OpenCodeCliClient extends StructuredCliClient {
     ];
     if (this.modelID && this.modelID !== 'default') args.push('--model', this.modelID);
     args.push('--file', promptPath);
-    const result = await execa(this.binary, args, {
+    const result = await runCliProvider(this.binary, args, {
       cwd,
-      cancelSignal: signal,
-      timeout: 10 * 60_000,
-      maxBuffer: 2 * 1024 * 1024,
-      reject: false,
-      extendEnv: false,
+      signal,
       env: this.environment(),
     });
     if (result.exitCode !== 0)
@@ -178,14 +228,10 @@ export class OpenClaudeCliClient extends StructuredCliClient {
         join(homedir(), '.openclaude', 'settings.json'),
     ];
     if (this.modelID && this.modelID !== 'default') args.push('--model', this.modelID);
-    const result = await execa(this.binary, args, {
+    const result = await runCliProvider(this.binary, args, {
       cwd,
       input: prompt,
-      cancelSignal: signal,
-      timeout: 10 * 60_000,
-      maxBuffer: 2 * 1024 * 1024,
-      reject: false,
-      extendEnv: false,
+      signal,
       env: this.environment(dirname(this.binary)),
     });
     if (result.exitCode !== 0)

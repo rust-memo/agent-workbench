@@ -5,6 +5,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import helmet from 'helmet';
 import { WebSocketServer } from 'ws';
 import { ZodError, z } from 'zod';
+import { WEB_SLASH_COMMANDS, commandUsesProvider } from './commands.js';
 import { EventHub } from './events.js';
 import { WebProviderManager } from './providers/manager.js';
 import { WebRuntimeManager } from './runtime.js';
@@ -46,6 +47,12 @@ const sessionBody = z
       .min(1)
       .max(120)
       .regex(/^[a-zA-Z0-9._:@/+\-]+$/),
+  })
+  .strict();
+const commandBody = z
+  .object({
+    command: z.string().trim().min(1).max(10_000),
+    externalContextApproved: z.boolean().default(false),
   })
   .strict();
 const turnBody = z
@@ -143,7 +150,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       runner.health(),
     ]);
     res.json({
-      version: '0.2.1',
+      version: '0.2.2',
       providers: providerCapabilities,
       scanners,
       recovery,
@@ -165,6 +172,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       typeof req.query.engagementId === 'string' ? req.query.engagementId : undefined;
     res.json(database.listSessions(engagementId));
   });
+  app.get('/api/v1/commands', (_req, res) => res.json(WEB_SLASH_COMMANDS));
   app.post('/api/v1/sessions', (req, res) => {
     const body = sessionBody.parse(req.body);
     if (!database.getEngagement(body.engagementId))
@@ -232,6 +240,31 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
   app.post('/api/v1/sessions/:id/cancel', (req, res) => {
     const id = z.string().uuid().parse(req.params.id);
     res.json({ cancelled: runtime.cancel(id) });
+  });
+  app.post('/api/v1/sessions/:id/commands', async (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const body = commandBody.parse(req.body);
+    const session = database.getSession(id);
+    if (!session) return res.status(404).json({ error: 'session not found' });
+    if (
+      commandUsesProvider(body.command) &&
+      session.provider !== 'ollama' &&
+      !body.externalContextApproved
+    ) {
+      return res.status(400).json({
+        error:
+          'explicit approval is required before this command sends session context to a CLI provider',
+      });
+    }
+    if (commandUsesProvider(body.command) && session.provider !== 'ollama') {
+      database.audit(id, 'provider.external_command_approved', {
+        provider: session.provider,
+        model: session.model,
+        command: body.command.split(/\s+/, 1)[0],
+      });
+    }
+    const result = await runtime.runCommand(id, body.command);
+    res.status(result.turnId ? 202 : 200).json(result);
   });
   app.get('/api/v1/sessions/:id/artifacts', (req, res) => {
     const id = z.string().uuid().parse(req.params.id);
