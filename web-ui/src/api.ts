@@ -8,7 +8,7 @@ export interface Session {
   id: string;
   engagementId: string;
   title: string;
-  provider: 'ollama' | 'qwen' | 'opencode';
+  provider: 'ollama' | 'qwen' | 'opencode' | 'openclaude';
   model: string;
   state: 'idle' | 'running' | 'cancelled' | 'error';
 }
@@ -23,6 +23,7 @@ export interface ProviderCapability {
   modelDiscovery: boolean;
   externalContextWarning: boolean;
   models: string[];
+  checkedAt: string;
 }
 export interface WorkbenchStatus {
   version: string;

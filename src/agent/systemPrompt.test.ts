@@ -153,6 +153,25 @@ describe('buildSystemPrompt', () => {
     expect(compact.length).toBeLessThan(full.length / 3);
   });
 
+  it('supports a general Web workbench profile without widening the CLI default', () => {
+    const general = buildSystemPrompt({
+      skills: new Registry(),
+      thinkingEnabled: false,
+      target: null,
+      promptProfile: 'general',
+    });
+    expect(general).toContain('Answer normal general questions directly');
+    expect(general).toContain('including arithmetic');
+    expect(general).not.toContain('Scope of work (HARD LIMIT)');
+
+    const cliDefault = buildSystemPrompt({
+      skills: new Registry(),
+      thinkingEnabled: false,
+      target: null,
+    });
+    expect(cliDefault).toContain('Scope of work (HARD LIMIT)');
+  });
+
   it('carries the creative hunter mindset section with all subheadings', () => {
     // These markers are load-bearing for the model's behavior on
     // engagements — chain thinking, quiet wins, tech-stack hot spots,

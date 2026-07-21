@@ -1,5 +1,5 @@
 export type WebMode = 'PLAN' | 'RECON';
-export type WebProviderId = 'ollama' | 'qwen' | 'opencode';
+export type WebProviderId = 'ollama' | 'qwen' | 'opencode' | 'openclaude';
 
 export interface ProviderCapabilities {
   provider: WebProviderId;
@@ -15,6 +15,7 @@ export interface ProviderCapabilities {
   modelDiscovery: boolean;
   externalContextWarning: boolean;
   models: string[];
+  checkedAt: string;
 }
 
 export interface ScopeDefinition {

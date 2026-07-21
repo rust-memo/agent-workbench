@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-const DEFAULT_REPO = 'PentesterFlow/agent';
+const DEFAULT_REPO = 'rust-memo/agent-workbench';
 const INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_BUFFER = 1024 * 1024;
 
@@ -29,7 +29,7 @@ export async function runSelfUpdate(version = 'latest'): Promise<UpdateResult> {
 
   // Pin the installer to the requested release tag (immutable git ref) instead
   // of the mutable `main` branch whenever a concrete version is given, so
-  // `/update v0.2.0` runs exactly the installer that shipped with that tag —
+  // `/update v0.2.1` runs exactly the installer that shipped with that tag —
   // auditable and unchanging — rather than whatever currently sits on main
   // (L10). `latest` has no tag to pin to, so it still tracks main; the binary
   // it pulls is SHA-256 verified fail-closed by install.sh regardless.

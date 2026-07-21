@@ -164,6 +164,7 @@ export class WebRuntimeManager {
         maxSteps: 10,
         autoCompactThreshold: 12_000,
         toolingProfile: 'minimal',
+        promptProfile: 'general',
         engagement: webEngagementPrompt(engagement),
       }),
     };

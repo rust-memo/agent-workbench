@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatRequest } from '../../llm/types.js';
-import { parseStructuredEnvelope } from './cli.js';
+import { parseOpenClaudeOutput, parseStructuredEnvelope } from './cli.js';
 
 const request: ChatRequest = {
   model: 'test',
@@ -41,5 +41,22 @@ describe('CLI provider structured output', () => {
         request,
       ),
     ).toBeUndefined();
+  });
+});
+
+describe('OpenClaude JSON output', () => {
+  it('extracts a normal result or structured output', () => {
+    expect(parseOpenClaudeOutput(JSON.stringify({ type: 'result', result: '{"ok":true}' }))).toBe(
+      '{"ok":true}',
+    );
+    expect(parseOpenClaudeOutput(JSON.stringify({ structured_output: { ok: true } }))).toBe(
+      '{"ok":true}',
+    );
+  });
+
+  it('surfaces OpenClaude execution errors', () => {
+    expect(() =>
+      parseOpenClaudeOutput(JSON.stringify({ is_error: true, errors: ['provider unavailable'] })),
+    ).toThrow('provider unavailable');
   });
 });

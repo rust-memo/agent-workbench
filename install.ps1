@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  pentesterflow online installer (Windows).
+  Agent Workbench online installer (Windows).
 
 .DESCRIPTION
   Downloads the standalone Windows binary from the latest GitHub release,
@@ -8,7 +8,7 @@
   and adds that directory to your user PATH.
 
   Run:
-    irm https://raw.githubusercontent.com/PentesterFlow/agent/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.ps1 | iex
 
 .NOTES
   Environment overrides:
@@ -23,14 +23,15 @@
 #Requires -Version 5
 $ErrorActionPreference = 'Stop'
 
-$Repo = if ($env:PENTESTERFLOW_REPO) { $env:PENTESTERFLOW_REPO } else { 'PentesterFlow/agent' }
+$Repo = if ($env:PENTESTERFLOW_REPO) { $env:PENTESTERFLOW_REPO } else { 'rust-memo/agent-workbench' }
 $Bin  = 'pentesterflow'
+$AssetPrefix = 'agent-workbench'
 
 # --- detect arch (only windows-x64 is published) -------------------------
 if (-not [Environment]::Is64BitOperatingSystem) {
   throw 'unsupported architecture: only 64-bit Windows (x64) is published.'
 }
-$asset = "$Bin-windows-x64.exe"
+$asset = "$AssetPrefix-windows-x64.exe"
 
 $ver = if ($env:PENTESTERFLOW_VERSION) { $env:PENTESTERFLOW_VERSION.Trim() } else { 'latest' }
 if ($ver -ne 'latest' -and -not $ver.StartsWith('v')) {

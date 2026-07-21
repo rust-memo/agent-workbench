@@ -13,6 +13,7 @@ function App(): React.ReactElement {
   const [status, setStatus] = useState<WorkbenchStatus | null>(null);
   const [providerDraft, setProviderDraft] = useState<Session['provider']>('qwen');
   const [modelDraft, setModelDraft] = useState('default');
+  const [checkingProviders, setCheckingProviders] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const lastSeq = useRef(0);
@@ -82,8 +83,21 @@ function App(): React.ReactElement {
   useEffect(() => {
     if (!activeSession) return;
     setProviderDraft(activeSession.provider);
-    setModelDraft(activeSession.model);
-  }, [activeSession?.id, activeSession?.provider, activeSession?.model]);
+    const capability = status?.providers.find((provider) => provider.provider === activeSession.provider);
+    setModelDraft(activeSession.model === 'default' ? capability?.models[0] ?? 'default' : activeSession.model);
+  }, [activeSession?.id, activeSession?.provider, activeSession?.model, status]);
+
+  const checkProviders = async (): Promise<void> => {
+    setCheckingProviders(true);
+    try {
+      setStatus(await api<WorkbenchStatus>('/status'));
+      setError('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setCheckingProviders(false);
+    }
+  };
 
   const switchProvider = async (): Promise<void> => {
     if (!activeSession) return;
@@ -115,11 +129,13 @@ function App(): React.ReactElement {
   return (
     <div className="shell">
       <header className="topbar">
-        <div className="brand"><span className="brand-mark">PF</span><div><strong>PentesterFlow</strong><small>Local Security Workbench · v0.2.0</small></div></div>
+        <div className="brand"><span className="brand-mark">AW</span><div><strong>Agent Workbench</strong><small>Local AI Security Workbench · v0.2.1</small></div></div>
         <div className="provider-switcher">
-          <label><span>Provider</span><select value={providerDraft} onChange={(event) => { const provider = event.target.value as Session['provider']; setProviderDraft(provider); const capability = status?.providers.find((item) => item.provider === provider); setModelDraft(capability?.models[0] ?? 'default'); }} disabled={!activeSession || activeSession.state === 'running'}>{status?.providers.map((provider) => <option key={provider.provider} value={provider.provider}>{provider.label}{provider.ready ? '' : ' · unavailable'}</option>)}</select></label>
-          <label><span>Model</span><input list="provider-models" value={modelDraft} onChange={(event) => setModelDraft(event.target.value)} disabled={!activeSession || activeSession.state === 'running'} /><datalist id="provider-models">{draftCapability?.models.map((model) => <option key={model} value={model} />)}</datalist></label>
+          <label><span>Provider</span><select value={providerDraft} onChange={(event) => { const provider = event.target.value as Session['provider']; setProviderDraft(provider); const capability = status?.providers.find((item) => item.provider === provider); setModelDraft(capability?.models[0] ?? 'default'); }} disabled={!activeSession || activeSession.state === 'running'}>{status?.providers.map((provider) => <option key={provider.provider} value={provider.provider}>{provider.ready ? '✓' : '×'} {provider.label} · {provider.models.length} models</option>)}</select></label>
+          <label><span>Model</span><select className="model-select" value={modelDraft} onChange={(event) => setModelDraft(event.target.value)} disabled={!activeSession || activeSession.state === 'running'}>{modelDraft && !draftCapability?.models.includes(modelDraft) && <option value={modelDraft}>{modelDraft}</option>}{draftCapability?.models.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
           <button onClick={() => void switchProvider()} disabled={!activeSession || activeSession.state === 'running' || !modelDraft.trim()}>Apply</button>
+          <button className="check-button" onClick={() => void checkProviders()} disabled={checkingProviders}>{checkingProviders ? 'Checking…' : 'Check models'}</button>
+          <small className={draftCapability?.ready ? 'provider-ready' : 'provider-unavailable'}>{draftCapability?.ready ? `CLI ready · ${draftCapability.models.length} models discovered` : draftCapability?.error ?? 'Unavailable'}</small>
         </div>
         <div className="top-status"><StatusPill label="Loopback" tone="good" /><StatusPill label={activeCapability?.label ?? 'Provider'} tone={activeCapability?.ready ? 'good' : 'warn'} /><StatusPill label={activeEngagement?.mode ?? 'NO MODE'} tone="neutral" /></div>
       </header>
@@ -142,7 +158,7 @@ function App(): React.ReactElement {
           {visibleEvents.map((event) => <EventLine key={event.eventId} event={event} />)}
         </div>
         <form className="composer" onSubmit={(event) => void submitTurn(event)}>
-          <span className="prompt">›</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} disabled={!selected || activeSession?.state === 'running'} placeholder={activeEngagement?.mode === 'PLAN' ? 'Ask the agent to produce a plan…' : 'Describe the authorized recon objective…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
+          <span className="prompt">›</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} disabled={!selected || activeSession?.state === 'running'} placeholder={activeEngagement?.mode === 'PLAN' ? 'Ask anything, plan, code, calculate, or troubleshoot…' : 'Ask a question or describe the authorized recon objective…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} />
           <button type="submit" disabled={!selected || !message.trim() || activeSession?.state === 'running'}>Run</button>
         </form>
       </main>
@@ -150,7 +166,7 @@ function App(): React.ReactElement {
       <aside className="inspector">
         <div className="section-title"><span>Artifacts</span><span className="count">{artifacts.length}</span></div>
         <div className="artifact-list">{artifacts.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} />)}{artifacts.length === 0 && <div className="empty">Saved evidence will appear here with SHA-256 metadata.</div>}</div>
-        <div className="security-note"><span>SECURITY BOUNDARY</span><p>Web tools cannot run arbitrary shell commands. v0.2.0 uses validated inputs and best-effort network scope enforcement.</p></div>
+        <div className="security-note"><span>SECURITY BOUNDARY</span><p>Web tools cannot run arbitrary shell commands. v0.2.1 uses validated inputs and best-effort network scope enforcement.</p></div>
       </aside>
       {error && <button className="toast" onClick={() => setError('')}>{error}<span>×</span></button>}
     </div>
@@ -171,7 +187,7 @@ function ArtifactCard({ artifact }: { artifact: Artifact }): React.ReactElement 
 }
 
 function Centered({ title, detail, error }: { title: string; detail: string; error?: string }): React.ReactElement {
-  return <div className="centered"><span className="brand-mark large">PF</span><h1>{title}</h1><p>{detail}</p>{error && <code>{error}</code>}</div>;
+  return <div className="centered"><span className="brand-mark large">AW</span><h1>{title}</h1><p>{detail}</p>{error && <code>{error}</code>}</div>;
 }
 function StatusPill({ label, tone }: { label: string; tone: string }): React.ReactElement { return <span className={`pill ${tone}`}><i />{label}</span>; }
 function formatBytes(value: number): string { return value < 1024 ? `${value} B` : `${(value / 1024).toFixed(1)} KB`; }
@@ -180,12 +196,14 @@ async function createWorkspace(refresh: () => Promise<void>, select: (id: string
   const host = window.prompt('Authorized host (example.com or *.example.com)');
   if (!host) return;
   const name = window.prompt('Engagement name', host) || host;
+  const requestedMode = window.prompt('Mode: PLAN or RECON', 'PLAN')?.trim().toUpperCase();
+  const mode = requestedMode === 'RECON' ? 'RECON' : 'PLAN';
   try {
-    const engagement = await api<Engagement>('/engagements', { method: 'POST', body: JSON.stringify({ name, mode: 'RECON', scope: {
+    const engagement = await api<Engagement>('/engagements', { method: 'POST', body: JSON.stringify({ name, mode, scope: {
       allowedHosts: [host], allowThirdPartyPassiveSources: false, allowDirectLowImpactRecon: true,
       limits: { requestsPerSecond: 5, concurrency: 5, maxUrlsPerHost: 500, maxRedirects: 0, maxRuntimeSeconds: 300, maxOutputBytes: 10485760 },
     } }) });
-    const session = await api<Session>('/sessions', { method: 'POST', body: JSON.stringify({ engagementId: engagement.id, title: `${name} / Recon`, provider: 'qwen', model: 'default' }) });
+    const session = await api<Session>('/sessions', { method: 'POST', body: JSON.stringify({ engagementId: engagement.id, title: `${name} / ${mode === 'PLAN' ? 'Plan' : 'Recon'}`, provider: 'qwen', model: 'default' }) });
     await refresh(); select(session.id);
   } catch (cause) { fail(cause instanceof Error ? cause.message : String(cause)); }
 }

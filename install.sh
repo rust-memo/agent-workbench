@@ -1,7 +1,7 @@
 #!/bin/sh
-# pentesterflow online installer (macOS / Linux).
+# Agent Workbench online installer (macOS / Linux).
 #
-#   curl -fsSL https://raw.githubusercontent.com/PentesterFlow/agent/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh | sh
 #
 # Downloads the standalone binary for your OS/arch from the latest GitHub
 # release, verifies its SHA-256, and installs it to ~/.local/bin.
@@ -14,8 +14,9 @@
 #   PENTESTERFLOW_SKIP_CHECKSUM=1     install without SHA-256 verification (unsafe)
 set -eu
 
-REPO="${PENTESTERFLOW_REPO:-PentesterFlow/agent}"
+REPO="${PENTESTERFLOW_REPO:-rust-memo/agent-workbench}"
 BIN="pentesterflow"
+ASSET_PREFIX="agent-workbench"
 
 info() { printf '%s\n' "$*" >&2; }
 err() {
@@ -49,7 +50,7 @@ case "$arch" in
   *) err "unsupported architecture '$arch'" ;;
 esac
 
-asset="${BIN}-${os}-${arch}"
+asset="${ASSET_PREFIX}-${os}-${arch}"
 
 ver="${PENTESTERFLOW_VERSION:-latest}"
 case "$ver" in

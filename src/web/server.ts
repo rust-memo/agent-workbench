@@ -39,13 +39,13 @@ const sessionBody = z
   .object({
     engagementId: z.string().uuid(),
     title: z.string().trim().min(1).max(120),
-    provider: z.enum(['ollama', 'qwen', 'opencode']).default('qwen'),
+    provider: z.enum(['ollama', 'qwen', 'opencode', 'openclaude']).default('qwen'),
     model: z
       .string()
       .trim()
       .min(1)
       .max(120)
-      .regex(/^[a-zA-Z0-9._:/-]+$/),
+      .regex(/^[a-zA-Z0-9._:@/+\-]+$/),
   })
   .strict();
 const turnBody = z
@@ -143,7 +143,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       runner.health(),
     ]);
     res.json({
-      version: '0.2.0',
+      version: '0.2.1',
       providers: providerCapabilities,
       scanners,
       recovery,
@@ -177,13 +177,13 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     const id = z.string().uuid().parse(req.params.id);
     const body = z
       .object({
-        provider: z.enum(['ollama', 'qwen', 'opencode']),
+        provider: z.enum(['ollama', 'qwen', 'opencode', 'openclaude']),
         model: z
           .string()
           .trim()
           .min(1)
           .max(160)
-          .regex(/^[a-zA-Z0-9._:/-]+$/),
+          .regex(/^[a-zA-Z0-9._:@/+\-]+$/),
         externalContextApproved: z.boolean().default(false),
       })
       .strict()
@@ -191,7 +191,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     if (body.provider !== 'ollama' && !body.externalContextApproved) {
       return res.status(400).json({
         error:
-          'Qwen Code and OpenCode may send session context to their configured remote model; explicit approval is required',
+          'External CLI providers may send session context to their configured remote model; explicit approval is required',
       });
     }
     database.audit(id, 'session.provider_changed', {

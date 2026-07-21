@@ -1,10 +1,10 @@
 <div align="center">
 
-<img src="assets/logo.png" alt="PentesterFlow" width="520" />
+# Agent Workbench
 
 ### Local AI security workbench and human-in-the-loop pentesting CLI.
 
-PentesterFlow helps security engineers move through recon, enumeration,
+Agent Workbench helps security engineers move through recon, enumeration,
 validation, evidence collection, and reporting while keeping the analyst in
 control.
 
@@ -16,7 +16,7 @@ control.
 [![license: Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![stars](https://img.shields.io/github/stars/rust-memo/agent-workbench?style=social)](https://github.com/rust-memo/agent-workbench/stargazers)
 
-**[Install](#install) · [Web Workbench](#local-web-workbench-v020) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
+**[Install](#install) · [Web Workbench](#local-web-workbench-v021) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
 
 </div>
 
@@ -112,7 +112,7 @@ irm https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.ps1
 Pin a release or choose an install directory:
 
 ```sh
-PENTESTERFLOW_VERSION=v0.2.0 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
+PENTESTERFLOW_VERSION=v0.2.1 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh)"
 ```
 
@@ -121,9 +121,9 @@ Download binaries directly from
 
 | OS | Assets |
 |---|---|
-| macOS | `pentesterflow-darwin-arm64`, `pentesterflow-darwin-x64` |
-| Linux | `pentesterflow-linux-arm64`, `pentesterflow-linux-x64` |
-| Windows | `pentesterflow-windows-x64.exe` |
+| macOS | `agent-workbench-darwin-arm64`, `agent-workbench-darwin-x64` |
+| Linux | `agent-workbench-linux-arm64`, `agent-workbench-linux-x64` |
+| Windows | `agent-workbench-windows-x64.exe` |
 
 The x64 standalone binaries are built with Bun's baseline runtime for older
 x86_64 CPUs. They do not require AVX2.
@@ -153,7 +153,7 @@ pentesterflow --resume <session-id>
 On resume, PentesterFlow automatically shows a recap of the previous session's
 persistent memory so you can continue without manually reconstructing context.
 
-## Local Web Workbench (v0.2.0)
+## Local Web Workbench (v0.2.1)
 
 The Web workbench keeps the existing CLI intact and adds an English-only,
 terminal-style local interface. Web sessions use SQLite as their only source of
@@ -163,7 +163,7 @@ JSON/SQLite synchronization.
 Requirements for the Web server:
 
 - Node.js 22 or newer (the CLI remains compatible with Node.js 20).
-- At least one provider: Ollama, Qwen Code, or OpenCode.
+- At least one provider: Ollama, Qwen Code, OpenCode, or OpenClaude.
 - `subfinder` and ProjectDiscovery `httpx` on the host for Recon actions.
 
 ```sh
@@ -182,8 +182,9 @@ Open the single-use pairing URL printed in the terminal. The fragment is
 exchanged for an HttpOnly, SameSite=Strict session cookie and is removed from
 the browser address bar immediately.
 
-v0.2.0 includes Plan and low-impact Recon modes, an Ollama/Qwen Code/OpenCode
-provider and model switcher, Subfinder, HTTPX,
+v0.2.1 includes general assistance, Plan and low-impact Recon modes, an
+Ollama/Qwen Code/OpenCode/OpenClaude provider and checked-model switcher,
+Subfinder, HTTPX,
 SQLite event replay, cancellation, and hash-addressed artifacts. Scanner
 actions use server-defined argument arrays without a shell. Scope enforcement
 is fail-closed for action inputs and best-effort at the network layer; it is not
@@ -203,10 +204,11 @@ Qwen Code is launched with `--safe-mode`, sandboxing, structured JSON output,
 and an empty temporary working directory. OpenCode is loaded from
 `~/.opencode/bin/opencode` by default and runs with `--pure --agent plan` in an
 empty temporary directory. Prompt payloads are kept out of process arguments.
-Both CLI providers require an explicit browser confirmation before every turn
+All external CLI providers require an explicit browser confirmation before every turn
 because their configured models may be remote. Override the server-owned paths
 only at startup with `PENTESTERFLOW_QWEN_PATH` or
-`PENTESTERFLOW_OPENCODE_PATH`.
+`PENTESTERFLOW_OPENCODE_PATH`. OpenClaude defaults to the local Node 22 binary
+and can be overridden with `PENTESTERFLOW_OPENCLAUDE_PATH`.
 
 Web data is stored under `.pentesterflow/web/` and is intentionally ignored by
 Git. Raw artifacts are kept until manually deleted. Preview is redacted by
