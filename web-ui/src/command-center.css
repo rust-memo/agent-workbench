@@ -2213,3 +2213,613 @@ select,
 .composer button {
   font-size: 15px;
 }
+
+/* Recon Board v6 ---------------------------------------------------------
+ * A quiet, progressive-disclosure workspace: the run path and live signals
+ * stay visible while review queues, policies, and playbooks open on demand. */
+.terminal-panel.recon-layout {
+  grid-template-rows: 66px minmax(390px, 1fr) minmax(150px, 23vh) auto;
+  background: #050c13;
+}
+
+.terminal-panel.recon-layout > .panel-head {
+  min-width: 0;
+  padding: 0 20px;
+  border-bottom: 1px solid #183349;
+  background: #07121b;
+}
+
+.terminal-panel.recon-layout > .panel-head > div:first-child {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0 12px;
+}
+
+.terminal-panel.recon-layout > .panel-head .eyebrow {
+  grid-column: 1 / -1;
+  font-size: 10px;
+}
+
+.terminal-panel.recon-layout > .panel-head h1 {
+  margin: 3px 0 0;
+  font-size: 20px;
+  white-space: nowrap;
+}
+
+.panel-context-v6 {
+  min-width: 0;
+  overflow: hidden;
+  color: #6f8496;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-toggle-v6 {
+  min-width: 126px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+}
+
+.review-toggle-v6 span {
+  min-width: 23px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #8cdfff;
+  background: #0c344a;
+  font-size: 12px;
+}
+
+.review-toggle-v6.active {
+  border-color: #197db0 !important;
+  color: #c8eeff !important;
+  background: #0a2a3d !important;
+}
+
+.recon-more-v6 {
+  position: relative;
+}
+
+.recon-more-v6 > summary {
+  width: 38px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #1a3b52;
+  border-radius: 7px;
+  color: #8da4b5;
+  background: #081621;
+  cursor: pointer;
+  font-size: 15px;
+  list-style: none;
+}
+
+.recon-more-v6 > summary::-webkit-details-marker {
+  display: none;
+}
+
+.recon-more-v6 > div {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 190px;
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  border: 1px solid #21455d;
+  border-radius: 9px;
+  background: #091722f7;
+  box-shadow: 0 20px 48px #000b;
+}
+
+.recon-more-v6 > div button,
+.recon-more-v6 > div a {
+  min-height: 35px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #9fb2c0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  text-decoration: none;
+}
+
+.recon-more-v6 > div button:hover,
+.recon-more-v6 > div a:hover {
+  border-color: #1b3c52;
+  color: #d8e8f2;
+  background: #0c2130;
+}
+
+.recon-board-v6 {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+  border-bottom: 0;
+  background: radial-gradient(circle at 68% -18%, #0b35483b, transparent 38%), #050d14;
+}
+
+.recon-commandbar-v6 {
+  min-height: 92px;
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) auto;
+  align-items: center;
+  gap: 22px;
+  padding: 15px 20px;
+  border-bottom: 1px solid #153148;
+  background: linear-gradient(180deg, #081722, #07131d);
+}
+
+.recon-target-v6 {
+  min-width: 0;
+}
+
+.recon-target-v6 h2 {
+  overflow: hidden;
+  margin: 4px 0 7px;
+  color: #edf4f8;
+  font-size: 22px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recon-target-v6 > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.recon-target-v6 code,
+.recon-target-v6 small {
+  flex: 0 1 auto;
+  overflow: hidden;
+  padding: 3px 8px;
+  border: 1px solid #1a4057;
+  border-radius: 999px;
+  color: #8db3c5;
+  background: #071d2a;
+  font: 12px / 1.2 "Times New Roman", Times, serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recon-target-v6 small {
+  color: #6f8494;
+}
+
+.recon-run-controls-v6 {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+}
+
+.recon-run-controls-v6 .profile-select {
+  min-width: 230px;
+}
+
+.recon-run-controls-v6 .profile-select span {
+  font-size: 11px;
+}
+
+.recon-run-controls-v6 .profile-select select {
+  height: 40px;
+  border-color: #1c435c;
+  border-radius: 7px;
+  background: #071925;
+  font-size: 14px;
+}
+
+.recon-run-controls-v6 .primary-action,
+.recon-run-controls-v6 .quiet-action {
+  height: 40px;
+  font-size: 14px;
+}
+
+.recon-run-controls-v6 .primary-action {
+  min-width: 120px;
+}
+
+.recon-run-controls-v6 .quiet-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recon-board-v6 > .new-scope {
+  border-bottom-color: #132a3d;
+  background: #06111a;
+}
+
+.recon-board-v6 > .new-scope summary {
+  padding: 9px 20px;
+  color: #73b7d2;
+  font-size: 13px;
+}
+
+.recon-board-v6 > .new-scope form {
+  padding: 7px 20px 16px;
+}
+
+.recon-canvas-v6 {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(285px, .72fr) minmax(420px, 1.28fr);
+  gap: 14px;
+  align-items: start;
+  overflow: auto;
+  padding: 16px 20px 22px;
+}
+
+.recon-path-v6,
+.recon-intelligence-v6,
+.recon-disclosure-v6 {
+  border: 1px solid #17374d;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #081722, #061019);
+  box-shadow: inset 0 1px #ffffff08, 0 12px 28px #0003;
+}
+
+.recon-path-v6 > header,
+.recon-intelligence-v6 > header {
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #15364d;
+}
+
+.recon-path-v6 h3,
+.recon-intelligence-v6 h3 {
+  margin: 4px 0 0;
+  color: #dce8ef;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.recon-state-v6,
+.signal-count-v6 {
+  flex: none;
+  padding: 5px 9px;
+  border: 1px solid #25445a;
+  border-radius: 999px;
+  color: #89a0b1;
+  background: #091c29;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.recon-state-v6.running,
+.recon-state-v6.completed {
+  border-color: #16744f;
+  color: #6de5ad;
+  background: #0b2e21;
+}
+
+.recon-state-v6.failed,
+.recon-state-v6.cancelled {
+  border-color: #783840;
+  color: #ff939a;
+  background: #30171b;
+}
+
+.recon-progress-v6 {
+  height: 3px;
+  overflow: hidden;
+  background: #132b3b;
+}
+
+.recon-progress-v6 i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #21c77b, #21a6dd);
+  transition: width .25s ease;
+}
+
+.recon-step-list-v6 {
+  padding: 5px 13px 7px;
+}
+
+.recon-step-list-v6 article {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 31px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 3px;
+  border-bottom: 1px solid #112b3d;
+}
+
+.recon-step-list-v6 article:last-child {
+  border-bottom: 0;
+}
+
+.recon-step-list-v6 article > span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #29475a;
+  border-radius: 50%;
+  color: #6c8393;
+  background: #091b28;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.recon-step-list-v6 article.completed > span {
+  border-color: #167550;
+  color: #56e49f;
+  background: #0a2e21;
+}
+
+.recon-step-list-v6 article.running > span {
+  border-color: #147eac;
+  color: #70dbff;
+  background: #092b3d;
+  box-shadow: 0 0 16px #11a9e035;
+}
+
+.recon-step-list-v6 strong,
+.recon-step-list-v6 small {
+  display: block;
+}
+
+.recon-step-list-v6 strong {
+  color: #cbd9e2;
+  font-size: 14px;
+}
+
+.recon-step-list-v6 small {
+  margin-top: 2px;
+  color: #667d8e;
+  font-size: 12px;
+}
+
+.recon-step-list-v6 code {
+  max-width: 130px;
+  overflow: hidden;
+  color: #69cfa8;
+  font: 11px "Times New Roman", Times, serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.signal-count-v6 {
+  color: #6dcce9;
+}
+
+.recon-metrics-v6 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  border-bottom: 1px solid #14344a;
+  background: #14344a;
+}
+
+.recon-metrics-v6 span {
+  min-height: 64px;
+  display: grid;
+  place-content: center;
+  gap: 3px;
+  color: #6f8494;
+  background: #071620;
+  text-align: center;
+}
+
+.recon-metrics-v6 strong {
+  color: #e4edf2;
+  font-size: 20px;
+}
+
+.recon-metrics-v6 small {
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.recon-insights-v6 {
+  min-height: 256px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 12px;
+}
+
+.recon-insights-v6 .insight-card {
+  padding: 11px 12px;
+  border-color: #18384e;
+  background: #081925;
+}
+
+.recon-insights-v6 .insight-title strong {
+  font-size: 14px;
+}
+
+.recon-insights-v6 .insight-title small,
+.recon-insights-v6 .priority {
+  font-size: 10px;
+}
+
+.recon-insights-v6 .insight-card p {
+  font-size: 12px;
+}
+
+.recon-insights-v6 .insight-actions button {
+  font-size: 11px;
+}
+
+.recon-empty-v6 {
+  min-height: 226px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  color: #607889;
+  text-align: center;
+}
+
+.recon-empty-v6 i {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #1b455f;
+  border-radius: 50%;
+  color: #38bce8;
+  background: #082233;
+  font-size: 19px;
+}
+
+.recon-empty-v6 strong {
+  margin-top: 12px;
+  color: #a8bac7;
+  font-size: 16px;
+}
+
+.recon-empty-v6 p {
+  max-width: 370px;
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.recon-disclosure-v6 {
+  overflow: hidden;
+}
+
+.recon-disclosure-v6 > summary {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0 15px;
+  color: #b6c8d4;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  list-style: none;
+}
+
+.recon-disclosure-v6 > summary::-webkit-details-marker {
+  display: none;
+}
+
+.recon-disclosure-v6 > summary span {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.recon-disclosure-v6 > summary i {
+  color: #40bce6;
+  font-style: normal;
+}
+
+.recon-disclosure-v6 > summary small {
+  color: #607788;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.recon-disclosure-v6[open] > summary {
+  border-bottom: 1px solid #15364d;
+}
+
+.recon-settings-v6 .scope-policy-buttons {
+  display: grid;
+  grid-template-columns: auto auto minmax(220px, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.recon-settings-v6 .scope-policy-buttons button {
+  height: 38px;
+  font-size: 12px;
+}
+
+.recon-settings-v6 .scope-policy-buttons p {
+  margin: 0;
+  color: #698091;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.recon-playbook-grid-v6 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 330px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.recon-playbook-grid-v6 .skill-card {
+  border: 1px solid #17384e;
+  border-radius: 7px;
+  background: #081925;
+}
+
+.recon-playbook-grid-v6 .skill-card strong,
+.recon-playbook-grid-v6 .skill-card p,
+.recon-playbook-grid-v6 .skill-card small,
+.recon-playbook-grid-v6 .skill-card button {
+  font-size: 12px;
+}
+
+.terminal-panel.recon-layout > .terminal {
+  padding: 14px 20px 24px;
+  border-top-color: #153349;
+  background: #030a10;
+}
+
+.terminal-panel.recon-layout > .terminal::before {
+  margin: -14px -20px 12px;
+  padding: 7px 20px;
+  color: #6c8292;
+  background: #06121bf2;
+  font: 11px "Times New Roman", Times, serif;
+}
+
+.terminal-panel.recon-layout .event-line pre,
+.terminal-panel.recon-layout .event-meta {
+  font-family: "Times New Roman", Times, serif;
+}
+
+@media (max-width: 1180px) {
+  .recon-commandbar-v6 {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .recon-run-controls-v6 {
+    justify-content: space-between;
+  }
+
+  .recon-run-controls-v6 .profile-select {
+    margin-right: auto;
+  }
+
+  .recon-canvas-v6 {
+    grid-template-columns: 1fr;
+  }
+
+  .recon-settings-v6 .scope-policy-buttons {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .recon-settings-v6 .scope-policy-buttons p {
+    grid-column: 1 / -1;
+  }
+}

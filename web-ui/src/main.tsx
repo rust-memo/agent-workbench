@@ -98,10 +98,13 @@ function App(): React.ReactElement {
   const [sidebarWidth, setSidebarWidth] = useState(232);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [inspectorWidth, setInspectorWidth] = useState(330);
+  const [reconInspectorOpen, setReconInspectorOpen] = useState(false);
   const [terminalCompact, setTerminalCompact] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(initialWorkspaceView);
   const [operatorPage, setOperatorPage] = useState<OperatorPage>(initialOperatorPage);
-  const [sidebarSection, setSidebarSection] = useState<SidebarSection>('operator');
+  const [sidebarSection, setSidebarSection] = useState<SidebarSection>(
+    workspaceView === 'recon' ? 'recon' : 'operator',
+  );
   const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>(null);
   const lastSeq = useRef(0);
 
@@ -267,6 +270,7 @@ function App(): React.ReactElement {
     (provider) => provider.provider === (activeSession?.provider ?? providerDraft),
   );
   const draftCapability = status?.providers.find((provider) => provider.provider === providerDraft);
+  const reconInspectorVisible = workspaceView === 'recon' && reconInspectorOpen;
 
   useEffect(() => {
     if (!activeSession) return;
@@ -674,13 +678,13 @@ function App(): React.ReactElement {
 
   return (
     <div
-      className={`shell ${terminalCompact ? 'terminal-compact' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${workspaceView === 'operator' ? 'operator-focus' : ''}`}
+      className={`shell ${terminalCompact ? 'terminal-compact' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${reconInspectorVisible ? '' : 'operator-focus'}`}
       style={
         {
           '--sidebar-width': sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
           '--left-splitter-width': sidebarCollapsed ? '0px' : '6px',
-          '--right-splitter-width': workspaceView === 'operator' ? '0px' : '6px',
-          '--inspector-width': workspaceView === 'operator' ? '0px' : `${inspectorWidth}px`,
+          '--right-splitter-width': reconInspectorVisible ? '6px' : '0px',
+          '--inspector-width': reconInspectorVisible ? `${inspectorWidth}px` : '0px',
         } as CSSProperties
       }
     >
@@ -1056,24 +1060,28 @@ function App(): React.ReactElement {
         <div className="panel-head">
           <div>
             <span className="eyebrow">
-              {workspaceView === 'operator' ? 'AI VULNERABILITY FINDER' : 'RECON WORKSPACE'}
+              {workspaceView === 'operator' ? 'AI VULNERABILITY FINDER' : 'CONTROLLED DISCOVERY'}
             </span>
-            <h1>{activeSession?.title ?? 'No session selected'}</h1>
+            <h1>
+              {workspaceView === 'recon'
+                ? 'Recon Board'
+                : (activeSession?.title ?? 'No session selected')}
+            </h1>
+            {workspaceView === 'recon' && activeSession && (
+              <small className="panel-context-v6">{activeSession.title}</small>
+            )}
           </div>
           <div className="panel-actions">
             {workspaceView === 'recon' && (
-              <button type="button" onClick={() => setTerminalCompact((current) => !current)}>
-                {terminalCompact ? 'Comfort view' : 'Dense view'}
-              </button>
-            )}
-            {activeSession && (
-              <a className="export-button" href={`/api/v1/sessions/${activeSession.id}/export`}>
-                Export redacted
-              </a>
-            )}
-            {activeSession && activeSession.state !== 'running' && (
-              <button type="button" className="danger" onClick={() => void deleteActiveSession()}>
-                Delete
+              <button
+                type="button"
+                className={reconInspectorOpen ? 'review-toggle-v6 active' : 'review-toggle-v6'}
+                onClick={() => setReconInspectorOpen((current) => !current)}
+              >
+                Review queue
+                <span>
+                  {proposals.filter((item) => item.status === 'pending').length + findings.length}
+                </span>
               </button>
             )}
             {activeSession?.state === 'running' && (
@@ -1084,6 +1092,38 @@ function App(): React.ReactElement {
                 onClick={() => void cancelTurn()}
               >
                 {cancellingSession === selected ? 'Cancelling…' : 'Cancel operation'}
+              </button>
+            )}
+            {workspaceView === 'recon' && (
+              <details className="recon-more-v6">
+                <summary aria-label="More Recon Board options">•••</summary>
+                <div>
+                  <button type="button" onClick={() => setTerminalCompact((current) => !current)}>
+                    {terminalCompact ? 'Comfort output' : 'Compact output'}
+                  </button>
+                  {activeSession && (
+                    <a href={`/api/v1/sessions/${activeSession.id}/export`}>Export redacted</a>
+                  )}
+                  {activeSession && activeSession.state !== 'running' && (
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={() => void deleteActiveSession()}
+                    >
+                      Delete session
+                    </button>
+                  )}
+                </div>
+              </details>
+            )}
+            {workspaceView === 'operator' && activeSession && (
+              <a className="export-button" href={`/api/v1/sessions/${activeSession.id}/export`}>
+                Export redacted
+              </a>
+            )}
+            {workspaceView === 'operator' && activeSession && activeSession.state !== 'running' && (
+              <button type="button" className="danger" onClick={() => void deleteActiveSession()}>
+                Delete
               </button>
             )}
           </div>
@@ -1231,7 +1271,7 @@ function App(): React.ReactElement {
         </div>
       </main>
 
-      {workspaceView === 'recon' && (
+      {reconInspectorVisible && (
         <>
           <div
             className="splitter splitter-right"
@@ -1432,67 +1472,66 @@ function ReconWorkspace({
       return (leftRank < 0 ? 999 : leftRank) - (rightRank < 0 ? 999 : rightRank);
     return left.name.localeCompare(right.name);
   });
+  const steps = latest?.steps ?? [
+    { id: 'scope', key: 'scope', label: 'Scope snapshot', status: 'pending', metrics: {} },
+    {
+      id: 'passive',
+      key: 'passive',
+      label: 'Passive discovery',
+      status: 'pending',
+      metrics: {},
+    },
+    { id: 'dns', key: 'dns', label: 'DNS resolution', status: 'pending', metrics: {} },
+    { id: 'http', key: 'http', label: 'HTTP probing', status: 'pending', metrics: {} },
+    { id: 'analysis', key: 'analysis', label: 'AI review', status: 'pending', metrics: {} },
+  ];
+  const numericSummary = Object.entries(latest?.summary ?? {}).filter(
+    (entry): entry is [string, number] => typeof entry[1] === 'number',
+  );
+  const currentStep = steps.find((step) => step.status === 'running');
   return (
-    <section className="recon-workspace">
-      <div className="recon-toolbar">
-        <div>
-          <span className="eyebrow">AUTHORIZED TARGET</span>
-          <strong>
-            {engagement?.scope.allowedHosts.join(', ') ?? 'Create a scoped recon session'}
-          </strong>
-          <small>
-            {engagement
-              ? `${engagement.scope.allowThirdPartyPassiveSources ? 'Passive sources on' : 'Passive sources off'} · ${engagement.scope.allowDirectLowImpactRecon ? 'Low-impact direct recon allowed' : 'Direct recon off'}`
-              : 'Scope is enforced before every scanner action.'}
-          </small>
+    <section className="recon-workspace recon-board-v6">
+      <header className="recon-commandbar-v6">
+        <div className="recon-target-v6">
+          <span className="eyebrow">AUTHORIZED SCOPE</span>
+          <h2>{engagement?.name ?? 'No scoped target selected'}</h2>
+          <div>
+            {engagement?.scope.allowedHosts.slice(0, 3).map((host) => (
+              <code key={host}>{host}</code>
+            ))}
+            {engagement && engagement.scope.allowedHosts.length > 3 && (
+              <small>+{engagement.scope.allowedHosts.length - 3} more</small>
+            )}
+          </div>
         </div>
-        <label className="profile-select">
-          <span>Run profile</span>
-          <select
-            value={profile}
-            onChange={(event) => setProfile(event.target.value as ReconRun['profile'])}
-            disabled={!session || running}
-          >
-            <option value="quick">Quick · DNS + HTTP</option>
-            <option value="standard">Standard · + crawl/scan proposals</option>
-            <option value="advanced">Advanced · + FFUF/Nmap proposals</option>
-          </select>
-        </label>
-        <div className="scope-policy-buttons">
-          <button
-            type="button"
-            className={engagement?.scope.allowThirdPartyPassiveSources ? 'enabled' : ''}
-            onClick={onTogglePassive}
-            disabled={!engagement || running || policyBusy}
-          >
-            Subfinder {engagement?.scope.allowThirdPartyPassiveSources ? 'ENABLED' : 'DISABLED'}
+        <div className="recon-run-controls-v6">
+          <label className="profile-select">
+            <span>Run profile</span>
+            <select
+              value={profile}
+              onChange={(event) => setProfile(event.target.value as ReconRun['profile'])}
+              disabled={!session || running}
+            >
+              <option value="quick">Quick · DNS + HTTP</option>
+              <option value="standard">Standard · crawl + safe scan</option>
+              <option value="advanced">Advanced · extended proposals</option>
+            </select>
+          </label>
+          <button type="button" className="quiet-action" onClick={onRefresh} disabled={!session}>
+            ↻<span>Refresh</span>
           </button>
           <button
             type="button"
-            className={
-              engagement?.scope.allowedHosts.some((host) => host.startsWith('*.')) ? 'enabled' : ''
+            className="primary-action"
+            onClick={onStart}
+            disabled={
+              !session || engagement?.mode !== 'RECON' || running || session.state === 'running'
             }
-            onClick={onToggleSubdomains}
-            disabled={!engagement || running || policyBusy}
           >
-            Subdomains{' '}
-            {engagement?.scope.allowedHosts.some((host) => host.startsWith('*.')) ? 'IN' : 'OUT'}
+            {running ? `Running · ${latest.progress}%` : 'Start recon'}
           </button>
         </div>
-        <button
-          type="button"
-          className="primary-action"
-          onClick={onStart}
-          disabled={
-            !session || engagement?.mode !== 'RECON' || running || session.state === 'running'
-          }
-        >
-          {running ? `Running ${latest.progress}%` : 'Start recon'}
-        </button>
-        <button type="button" className="quiet-action" onClick={onRefresh} disabled={!session}>
-          Refresh
-        </button>
-      </div>
+      </header>
 
       <NewReconScope
         provider={provider}
@@ -1502,124 +1541,158 @@ function ReconWorkspace({
         onError={onError}
       />
 
-      <div className="recon-scroll">
-        <div className="pipeline-grid">
-          {(
-            latest?.steps ?? [
-              {
-                id: 'scope',
-                key: 'scope',
-                label: 'Scope snapshot',
-                status: 'pending',
-                metrics: {},
-              },
-              {
-                id: 'passive',
-                key: 'passive',
-                label: 'Passive discovery',
-                status: 'pending',
-                metrics: {},
-              },
-              { id: 'dns', key: 'dns', label: 'DNS resolution', status: 'pending', metrics: {} },
-              { id: 'http', key: 'http', label: 'HTTP probing', status: 'pending', metrics: {} },
-              {
-                id: 'analysis',
-                key: 'analysis',
-                label: 'Analysis',
-                status: 'pending',
-                metrics: {},
-              },
-            ]
-          ).map((step, index) => (
-            <article className={`pipeline-step ${step.status}`} key={step.id}>
-              <span>{String(index + 1).padStart(2, '0')}</span>
-              <div>
-                <strong>{step.label}</strong>
-                <small>{step.detail ?? step.status.replace('_', ' ')}</small>
+      <div className="recon-canvas-v6">
+        <section className="recon-path-v6">
+          <header>
+            <div>
+              <span className="eyebrow">RUN PATH</span>
+              <h3>{currentStep?.label ?? (latest ? humanize(latest.status) : 'Ready to begin')}</h3>
+            </div>
+            <strong className={`recon-state-v6 ${latest?.status ?? 'idle'}`}>
+              {latest ? `${latest.progress}%` : 'Idle'}
+            </strong>
+          </header>
+          <div className="recon-progress-v6">
+            <i style={{ width: `${latest?.progress ?? 0}%` }} />
+          </div>
+          <div className="recon-step-list-v6">
+            {steps.map((step, index) => (
+              <article className={step.status} key={step.id}>
+                <span>
+                  {step.status === 'completed'
+                    ? '✓'
+                    : step.status === 'running'
+                      ? '›'
+                      : String(index + 1)}
+                </span>
+                <div>
+                  <strong>{step.label}</strong>
+                  <small>{step.detail ?? humanize(step.status)}</small>
+                </div>
                 {Object.keys(step.metrics).length > 0 && <code>{formatMetrics(step.metrics)}</code>}
-              </div>
-            </article>
-          ))}
-        </div>
+              </article>
+            ))}
+          </div>
+        </section>
 
-        <div className="recon-columns">
-          <section className="results-panel">
-            <header>
-              <div>
-                <span className="eyebrow">RESULTS & PRIORITIES</span>
-                <h2>
-                  {latest ? `${latest.profile} run · ${latest.status}` : 'No recon results yet'}
-                </h2>
-              </div>
-              {latest && (
-                <strong className={`run-status ${latest.status}`}>{latest.progress}%</strong>
-              )}
-            </header>
-            {latest && Object.keys(latest.summary).length > 0 && (
-              <div className="summary-grid">
-                {Object.entries(latest.summary)
-                  .filter(([, value]) => typeof value === 'number')
-                  .map(([key, value]) => (
-                    <span key={key}>
-                      <strong>{String(value)}</strong>
-                      {humanize(key)}
-                    </span>
-                  ))}
+        <section className="recon-intelligence-v6">
+          <header>
+            <div>
+              <span className="eyebrow">LIVE INTELLIGENCE</span>
+              <h3>{latest ? 'Signals worth reviewing' : 'Results will collect here'}</h3>
+            </div>
+            <span className="signal-count-v6">{latest?.insights.length ?? 0} signals</span>
+          </header>
+
+          {numericSummary.length > 0 && (
+            <div className="recon-metrics-v6">
+              {numericSummary.slice(0, 4).map(([key, value]) => (
+                <span key={key}>
+                  <strong>{value}</strong>
+                  <small>{humanize(key)}</small>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="recon-insights-v6">
+            {latest?.insights.slice(0, 4).map((insight) => (
+              <article
+                className={`insight-card ${insight.priority} ${insight.status}`}
+                key={insight.id}
+              >
+                <div className="insight-title">
+                  <span className={`priority ${insight.priority}`}>{insight.priority}</span>
+                  <strong>{insight.title}</strong>
+                  <small>{insight.type}</small>
+                </div>
+                <p>{insight.rationale}</p>
+                {insight.target && <code>{insight.target}</code>}
+                <div className="insight-actions">
+                  {insight.skill && (
+                    <button
+                      type="button"
+                      onClick={() => insight.skill && onLoadSkill(insight.skill, insight.target)}
+                    >
+                      Load /{insight.skill}
+                    </button>
+                  )}
+                  {insight.status === 'new' && (
+                    <>
+                      <button type="button" onClick={() => onUpdateInsight(insight, 'accepted')}>
+                        Queue review
+                      </button>
+                      <button type="button" onClick={() => onUpdateInsight(insight, 'dismissed')}>
+                        Dismiss
+                      </button>
+                    </>
+                  )}
+                  {insight.status === 'accepted' && (
+                    <button type="button" onClick={() => onUpdateInsight(insight, 'completed')}>
+                      Mark tested
+                    </button>
+                  )}
+                </div>
+              </article>
+            ))}
+            {!latest?.insights.length && (
+              <div className="recon-empty-v6">
+                <i>⌁</i>
+                <strong>No signals yet</strong>
+                <p>Start a scoped run. The board will surface only useful assets and follow-ups.</p>
               </div>
             )}
-            <div className="insight-list">
-              {latest?.insights.map((insight) => (
-                <article
-                  className={`insight-card ${insight.priority} ${insight.status}`}
-                  key={insight.id}
-                >
-                  <div className="insight-title">
-                    <span className={`priority ${insight.priority}`}>{insight.priority}</span>
-                    <strong>{insight.title}</strong>
-                    <small>{insight.type}</small>
-                  </div>
-                  <p>{insight.rationale}</p>
-                  {insight.target && <code>{insight.target}</code>}
-                  <div className="insight-actions">
-                    {insight.skill && (
-                      <button
-                        type="button"
-                        onClick={() => insight.skill && onLoadSkill(insight.skill, insight.target)}
-                      >
-                        Load /{insight.skill}
-                      </button>
-                    )}
-                    {insight.status === 'new' && (
-                      <>
-                        <button type="button" onClick={() => onUpdateInsight(insight, 'accepted')}>
-                          Queue review
-                        </button>
-                        <button type="button" onClick={() => onUpdateInsight(insight, 'dismissed')}>
-                          Dismiss
-                        </button>
-                      </>
-                    )}
-                    {insight.status === 'accepted' && (
-                      <button type="button" onClick={() => onUpdateInsight(insight, 'completed')}>
-                        Mark tested
-                      </button>
-                    )}
-                  </div>
-                </article>
-              ))}
-              {!latest?.insights.length && (
-                <div className="empty compact">
-                  Start a run to rank live assets, review signals, and generate manual follow-ups.
-                </div>
-              )}
-            </div>
-          </section>
+          </div>
+        </section>
 
-          <aside className="skills-panel">
-            <header>
-              <span className="eyebrow">TEST PLAYBOOKS</span>
-              <h2>{skills.length} available skills</h2>
-            </header>
+        <details className="recon-disclosure-v6 recon-settings-v6">
+          <summary>
+            <span>
+              <i>⚙</i>
+              Run settings
+            </span>
+            <small>Scope and discovery policy</small>
+          </summary>
+          <div className="scope-policy-buttons">
+            <button
+              type="button"
+              className={engagement?.scope.allowThirdPartyPassiveSources ? 'enabled' : ''}
+              onClick={onTogglePassive}
+              disabled={!engagement || running || policyBusy}
+            >
+              Subfinder {engagement?.scope.allowThirdPartyPassiveSources ? 'enabled' : 'disabled'}
+            </button>
+            <button
+              type="button"
+              className={
+                engagement?.scope.allowedHosts.some((host) => host.startsWith('*.'))
+                  ? 'enabled'
+                  : ''
+              }
+              onClick={onToggleSubdomains}
+              disabled={!engagement || running || policyBusy}
+            >
+              Subdomains{' '}
+              {engagement?.scope.allowedHosts.some((host) => host.startsWith('*.'))
+                ? 'included'
+                : 'excluded'}
+            </button>
+            <p>
+              Active requests remain fail-closed to the authorized scope. Passive sources may use
+              third-party services only when enabled.
+            </p>
+          </div>
+        </details>
+
+        <details className="recon-disclosure-v6 recon-playbooks-v6">
+          <summary>
+            <span>
+              <i>⌘</i>
+              Test playbooks
+            </span>
+            <small>{skills.length} available on demand</small>
+          </summary>
+          <div className="recon-playbook-grid-v6">
             {visibleSkills.map((skill) => (
               <article className="skill-card" key={skill.name}>
                 <div>
@@ -1627,22 +1700,14 @@ function ReconWorkspace({
                   <span className={`priority ${skill.risk}`}>{skill.risk}</span>
                 </div>
                 <p>{skill.description}</p>
-                <small>
-                  {skill.category} · {skill.license} ·{' '}
-                  {skill.explicitOnly ? 'manual only' : 'agent ready'}
-                </small>
-                <div>
-                  <button type="button" onClick={() => onLoadSkill(skill.name)} disabled={!session}>
-                    Load for next turn
-                  </button>
-                  <a href={skill.source} target="_blank" rel="noreferrer">
-                    Source
-                  </a>
-                </div>
+                <small>{skill.explicitOnly ? 'Manual only' : 'Agent ready'}</small>
+                <button type="button" onClick={() => onLoadSkill(skill.name)} disabled={!session}>
+                  Load for next turn
+                </button>
               </article>
             ))}
-          </aside>
-        </div>
+          </div>
+        </details>
       </div>
     </section>
   );
