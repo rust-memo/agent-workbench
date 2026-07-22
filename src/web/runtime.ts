@@ -82,6 +82,14 @@ export class WebRuntimeManager {
     return listWebSkills();
   }
 
+  invalidateEngagement(engagementId: string): void {
+    for (const [sessionId, live] of this.live) {
+      if (live.engagement.id !== engagementId) continue;
+      if (live.controller) throw new Error('cannot change scope while an operation is running');
+      this.live.delete(sessionId);
+    }
+  }
+
   async injectSkill(sessionId: string, name: string): Promise<{ loaded: string }> {
     const runtime = this.getOrCreate(sessionId);
     if (!runtime.agent.skills.has(name)) throw new Error('skill not found');

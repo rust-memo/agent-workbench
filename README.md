@@ -232,6 +232,14 @@ content is explicitly marked untrusted. Approval-gated scanners can be approved
 once or declined; either decision is audited and a declined proposal cannot be
 reused.
 
+Subfinder is intentionally off until **Passive sources** is enabled for that
+scope, because passive providers may receive the root domain. Existing scopes
+can change this policy from either workspace. Enable **Subdomains in scope**
+separately only when wildcard subdomains are part of the testing authorization;
+otherwise discovered names are retained as discovery-only and are not passed to
+active DNS/HTTP actions. Every policy edit increments the scope version and
+expires stale pending approvals.
+
 DNSX and HTTPX are low-impact Recon actions when direct recon is enabled.
 Katana, Nuclei, FFUF, Nmap, and bounded finding validation create an
 operator-visible proposal instead of executing in

@@ -482,6 +482,31 @@ body.resizing {
   color: #596a80;
   font-size: 8px;
 }
+.operator-scope-policy {
+  display: flex;
+  gap: 4px;
+  margin-top: 5px;
+}
+.operator-scope-policy button {
+  padding: 3px 6px;
+  border: 1px solid #2a3749;
+  border-radius: 5px;
+  color: #6f8095;
+  background: #101722;
+  cursor: pointer;
+  font-size: 6px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.operator-scope-policy button.enabled {
+  border-color: #2c6c56;
+  color: #62dcae;
+  background: #142b23;
+}
+.operator-scope-policy button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 .operator-profile {
   display: grid;
   gap: 3px;
@@ -974,6 +999,29 @@ body.resizing {
   padding: 0 13px;
   cursor: pointer;
   font-size: 10px;
+}
+.scope-policy-buttons {
+  display: flex;
+  gap: 4px;
+}
+.scope-policy-buttons button {
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid #2b394c;
+  border-radius: 7px;
+  color: #708097;
+  background: #101722;
+  cursor: pointer;
+  font-size: 8px;
+}
+.scope-policy-buttons button.enabled {
+  border-color: #2d7159;
+  color: #65dfb1;
+  background: #153027;
+}
+.scope-policy-buttons button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .primary-action {
   border: 1px solid #2d8a68;

@@ -3,9 +3,18 @@ export interface Engagement {
   name: string;
   mode: 'PLAN' | 'RECON';
   scope: {
+    version: number;
     allowedHosts: string[];
     allowThirdPartyPassiveSources: boolean;
     allowDirectLowImpactRecon: boolean;
+    limits: {
+      requestsPerSecond: number;
+      concurrency: number;
+      maxUrlsPerHost: number;
+      maxRedirects: number;
+      maxRuntimeSeconds: number;
+      maxOutputBytes: number;
+    };
   };
 }
 export interface Session {

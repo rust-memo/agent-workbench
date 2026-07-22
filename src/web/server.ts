@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { type Server, createServer } from 'node:http';
+import { isIP } from 'node:net';
 import { join, resolve } from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import helmet from 'helmet';
@@ -174,6 +175,73 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       scopeVersion: engagement.scope.version,
     });
     res.status(201).json(engagement);
+  });
+  app.patch('/api/v1/engagements/:id/scope-policy', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const body = z
+      .object({
+        allowThirdPartyPassiveSources: z.boolean().optional(),
+        allowDirectLowImpactRecon: z.boolean().optional(),
+        includeSubdomains: z.boolean().optional(),
+      })
+      .strict()
+      .refine((value) => Object.values(value).some((item) => item !== undefined), {
+        message: 'at least one scope policy change is required',
+      })
+      .parse(req.body);
+    const current = database.getEngagement(id);
+    if (!current) return res.status(404).json({ error: 'engagement not found' });
+    if (database.listSessions(id).some((session) => session.state === 'running'))
+      return res.status(409).json({ error: 'cannot change scope while an operation is running' });
+    runtime.invalidateEngagement(id);
+    const exactHosts = current.scope.allowedHosts.filter((host) => !host.startsWith('*.'));
+    const domainRoots = exactHosts.filter((host) => isIP(host) === 0);
+    const wildcardHosts = current.scope.allowedHosts.filter((host) => host.startsWith('*.'));
+    const allowedHosts =
+      body.includeSubdomains === undefined
+        ? current.scope.allowedHosts
+        : body.includeSubdomains
+          ? [
+              ...new Set([
+                ...exactHosts,
+                ...wildcardHosts,
+                ...domainRoots.map((host) => `*.${host}`),
+              ]),
+            ]
+          : [...exactHosts, ...wildcardHosts.filter((host) => !exactHosts.includes(host.slice(2)))];
+    const scope = createScope(
+      {
+        allowedHosts,
+        allowThirdPartyPassiveSources:
+          body.allowThirdPartyPassiveSources ?? current.scope.allowThirdPartyPassiveSources,
+        allowDirectLowImpactRecon:
+          body.allowDirectLowImpactRecon ?? current.scope.allowDirectLowImpactRecon,
+        limits: current.scope.limits,
+      },
+      current.scope.version + 1,
+    );
+    const updated = database.updateEngagementScope(id, scope);
+    database.audit(undefined, 'engagement.scope_policy_updated', {
+      engagementId: id,
+      scopeVersion: scope.version,
+      allowThirdPartyPassiveSources: scope.allowThirdPartyPassiveSources,
+      allowDirectLowImpactRecon: scope.allowDirectLowImpactRecon,
+      allowedHosts: scope.allowedHosts,
+    });
+    for (const session of database.listSessions(id)) {
+      events.publish({
+        engagementId: id,
+        sessionId: session.id,
+        type: 'scope.updated',
+        payload: {
+          version: scope.version,
+          allowThirdPartyPassiveSources: scope.allowThirdPartyPassiveSources,
+          allowDirectLowImpactRecon: scope.allowDirectLowImpactRecon,
+          allowedHosts: scope.allowedHosts,
+        },
+      });
+    }
+    res.json(updated);
   });
   app.get('/api/v1/sessions', (req, res) => {
     const engagementId =

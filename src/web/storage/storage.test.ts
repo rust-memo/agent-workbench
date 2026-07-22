@@ -100,6 +100,42 @@ describe.skipIf(!supportsNodeSqlite)('Web persistence', () => {
     database.close();
   });
 
+  it('versions scope policy changes and expires stale pending approvals', async () => {
+    const { database, sessionId, engagementId } = await fixture();
+    const proposal = database.createActionProposal({
+      engagementId,
+      sessionId,
+      action: 'katana',
+      arguments: { inputArtifactId: '8e847944-c004-46f8-99bd-09c1de47b0b1', depth: 2 },
+      reason: 'crawl approved target',
+      risk: 'medium',
+      scopeVersion: 1,
+      approvalHash: 'a'.repeat(64),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const updated = database.updateEngagementScope(
+      engagementId,
+      createScope(
+        {
+          allowedHosts: ['example.com', '*.example.com'],
+          allowThirdPartyPassiveSources: true,
+          allowDirectLowImpactRecon: true,
+        },
+        2,
+      ),
+    );
+    expect(updated.scope).toMatchObject({
+      version: 2,
+      allowedHosts: ['example.com', '*.example.com'],
+      allowThirdPartyPassiveSources: true,
+    });
+    expect(database.getActionProposal(proposal.id)).toMatchObject({
+      status: 'expired',
+      error: 'scope policy changed',
+    });
+    database.close();
+  });
+
   it('persists scanner findings as needs-validation and updates coverage atomically', async () => {
     const { root, database, sessionId, engagementId } = await fixture();
     const store = new ArtifactStore(join(root, 'artifacts'), database);

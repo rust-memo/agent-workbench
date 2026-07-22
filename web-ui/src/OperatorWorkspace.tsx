@@ -25,6 +25,7 @@ export function OperatorWorkspace({
   findings,
   status,
   analyzing,
+  policyBusy,
   onProfile,
   onStart,
   onCancel,
@@ -32,6 +33,8 @@ export function OperatorWorkspace({
   onApprove,
   onReject,
   onLoadSkill,
+  onTogglePassive,
+  onToggleSubdomains,
 }: {
   engagement?: Engagement;
   session?: Session;
@@ -43,6 +46,7 @@ export function OperatorWorkspace({
   findings: Finding[];
   status: WorkbenchStatus | null;
   analyzing: boolean;
+  policyBusy: boolean;
   onProfile: (profile: ReconRun['profile']) => void;
   onStart: () => void;
   onCancel: () => void;
@@ -50,6 +54,8 @@ export function OperatorWorkspace({
   onApprove: (proposal: ActionProposal) => void;
   onReject: (proposal: ActionProposal) => void;
   onLoadSkill: (name: string, target?: string) => void;
+  onTogglePassive: () => void;
+  onToggleSubdomains: () => void;
 }): React.ReactElement {
   const [outputFilter, setOutputFilter] = useState<OutputFilter>('all');
   const outputRef = useRef<HTMLDivElement>(null);
@@ -122,6 +128,33 @@ export function OperatorWorkspace({
           <small>AUTHORIZED SCOPE</small>
           <strong>{engagement?.scope.allowedHosts.join(', ') ?? 'No scope selected'}</strong>
           <span>Outside discoveries are visible but never authorized automatically.</span>
+          <div className="operator-scope-policy">
+            <button
+              type="button"
+              className={engagement?.scope.allowThirdPartyPassiveSources ? 'enabled' : ''}
+              onClick={onTogglePassive}
+              disabled={!engagement || running || policyBusy}
+              title="Allow Subfinder to query third-party passive data sources"
+            >
+              Passive sources {engagement?.scope.allowThirdPartyPassiveSources ? 'ON' : 'OFF'}
+            </button>
+            <button
+              type="button"
+              className={
+                engagement?.scope.allowedHosts.some((host) => host.startsWith('*.'))
+                  ? 'enabled'
+                  : ''
+              }
+              onClick={onToggleSubdomains}
+              disabled={!engagement || running || policyBusy}
+              title="Allow low-impact recon on discovered subdomains"
+            >
+              Subdomains{' '}
+              {engagement?.scope.allowedHosts.some((host) => host.startsWith('*.'))
+                ? 'IN SCOPE'
+                : 'DISCOVERY ONLY'}
+            </button>
+          </div>
         </div>
         <label className="operator-profile">
           <span>Pipeline</span>

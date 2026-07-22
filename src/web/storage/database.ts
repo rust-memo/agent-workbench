@@ -338,6 +338,31 @@ export class WebDatabase {
     return row ? engagementFromRow(row) : undefined;
   }
 
+  updateEngagementScope(id: string, scope: ScopeDefinition): EngagementRow {
+    const now = new Date().toISOString();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = this.db
+        .prepare('UPDATE engagements SET scope_json = ?, updated_at = ? WHERE id = ?')
+        .run(JSON.stringify(scope), now, id);
+      if (Number(result.changes) !== 1) throw new Error('engagement not found');
+      this.db
+        .prepare(
+          `UPDATE action_proposals
+           SET status = 'expired', error = 'scope policy changed', updated_at = ?
+           WHERE engagement_id = ? AND status = 'pending'`,
+        )
+        .run(now, id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    const engagement = this.getEngagement(id);
+    if (!engagement) throw new Error('engagement not found');
+    return engagement;
+  }
+
   createSession(
     engagementId: string,
     title: string,

@@ -68,6 +68,7 @@ function App(): React.ReactElement {
   const [modelDraft, setModelDraft] = useState('default');
   const [checkingProviders, setCheckingProviders] = useState(false);
   const [analyzingEvidence, setAnalyzingEvidence] = useState(false);
+  const [updatingScopePolicy, setUpdatingScopePolicy] = useState(false);
   const [message, setMessage] = useState('');
   const [cancellingSession, setCancellingSession] = useState('');
   const [error, setError] = useState('');
@@ -165,7 +166,8 @@ function App(): React.ReactElement {
           (event.type === 'artifact.saved' ||
             event.type.startsWith('action.') ||
             event.type.startsWith('finding.') ||
-            event.type.startsWith('recon.')) &&
+            event.type.startsWith('recon.') ||
+            event.type === 'scope.updated') &&
           (!selected || event.sessionId === selected)
         ) {
           void refreshSessionData(event.sessionId);
@@ -439,6 +441,40 @@ function App(): React.ReactElement {
     }
   };
 
+  const updateScopePolicy = async (change: {
+    allowThirdPartyPassiveSources?: boolean;
+    includeSubdomains?: boolean;
+  }): Promise<void> => {
+    if (!activeEngagement || !selected || updatingScopePolicy) return;
+    if (
+      change.allowThirdPartyPassiveSources === true &&
+      !window.confirm(
+        'Enable third-party passive discovery? Subfinder may send the authorized root domain to external data sources.',
+      )
+    )
+      return;
+    if (
+      change.includeSubdomains === true &&
+      !window.confirm(
+        'Authorize active low-impact recon for discovered subdomains? Confirm that wildcard subdomains are included in your testing authorization.',
+      )
+    )
+      return;
+    setUpdatingScopePolicy(true);
+    try {
+      await api(`/engagements/${activeEngagement.id}/scope-policy`, {
+        method: 'PATCH',
+        body: JSON.stringify(change),
+      });
+      await Promise.all([refresh(), refreshSessionData(selected)]);
+      setError('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setUpdatingScopePolicy(false);
+    }
+  };
+
   const updateFinding = async (finding: Finding, status: Finding['status']): Promise<void> => {
     if (!selected) return;
     let validationArtifactId: string | undefined;
@@ -709,7 +745,7 @@ function App(): React.ReactElement {
           </div>
           {activeEngagement && (
             <div className="scope-card">
-              <small>SCOPE v{1}</small>
+              <small>SCOPE v{activeEngagement.scope.version}</small>
               <strong>{activeEngagement.name}</strong>
               {activeEngagement.scope.allowedHosts.map((host) => (
                 <code key={host}>{host}</code>
@@ -825,6 +861,20 @@ function App(): React.ReactElement {
             onApprove={(proposal) => void approveAction(proposal)}
             onReject={(proposal) => void rejectAction(proposal)}
             onLoadSkill={(name, target) => void loadSkill(name, target)}
+            policyBusy={updatingScopePolicy}
+            onTogglePassive={() =>
+              void updateScopePolicy({
+                allowThirdPartyPassiveSources:
+                  !activeEngagement?.scope.allowThirdPartyPassiveSources,
+              })
+            }
+            onToggleSubdomains={() =>
+              void updateScopePolicy({
+                includeSubdomains: !activeEngagement?.scope.allowedHosts.some((host) =>
+                  host.startsWith('*.'),
+                ),
+              })
+            }
           />
         ) : (
           <>
@@ -846,6 +896,20 @@ function App(): React.ReactElement {
               onLoadSkill={(name, target) => void loadSkill(name, target)}
               onUpdateInsight={(insight, nextStatus) => void updateInsight(insight, nextStatus)}
               onError={setError}
+              policyBusy={updatingScopePolicy}
+              onTogglePassive={() =>
+                void updateScopePolicy({
+                  allowThirdPartyPassiveSources:
+                    !activeEngagement?.scope.allowThirdPartyPassiveSources,
+                })
+              }
+              onToggleSubdomains={() =>
+                void updateScopePolicy({
+                  includeSubdomains: !activeEngagement?.scope.allowedHosts.some((host) =>
+                    host.startsWith('*.'),
+                  ),
+                })
+              }
             />
             <div className="terminal" role="log" aria-live="polite">
               {visibleEvents.length === 0 && (
@@ -1073,6 +1137,9 @@ function ReconWorkspace({
   onLoadSkill,
   onUpdateInsight,
   onError,
+  policyBusy,
+  onTogglePassive,
+  onToggleSubdomains,
 }: {
   engagement?: Engagement;
   session?: Session;
@@ -1088,6 +1155,9 @@ function ReconWorkspace({
   onLoadSkill: (name: string, target?: string) => void;
   onUpdateInsight: (insight: ReconInsight, status: ReconInsight['status']) => void;
   onError: (message: string) => void;
+  policyBusy: boolean;
+  onTogglePassive: () => void;
+  onToggleSubdomains: () => void;
 }): React.ReactElement {
   const latest = runs[0];
   const running = latest?.status === 'running' || latest?.status === 'queued';
@@ -1131,6 +1201,27 @@ function ReconWorkspace({
             <option value="advanced">Advanced · + FFUF/Nmap proposals</option>
           </select>
         </label>
+        <div className="scope-policy-buttons">
+          <button
+            type="button"
+            className={engagement?.scope.allowThirdPartyPassiveSources ? 'enabled' : ''}
+            onClick={onTogglePassive}
+            disabled={!engagement || running || policyBusy}
+          >
+            Passive {engagement?.scope.allowThirdPartyPassiveSources ? 'ON' : 'OFF'}
+          </button>
+          <button
+            type="button"
+            className={
+              engagement?.scope.allowedHosts.some((host) => host.startsWith('*.')) ? 'enabled' : ''
+            }
+            onClick={onToggleSubdomains}
+            disabled={!engagement || running || policyBusy}
+          >
+            Subdomains{' '}
+            {engagement?.scope.allowedHosts.some((host) => host.startsWith('*.')) ? 'IN' : 'OUT'}
+          </button>
+        </div>
         <button
           type="button"
           className="primary-action"
