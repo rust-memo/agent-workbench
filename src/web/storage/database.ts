@@ -601,6 +601,20 @@ export class WebDatabase {
       .run(status, resultArtifactId ?? null, error ?? null, new Date().toISOString(), id);
   }
 
+  rejectActionProposal(id: string, sessionId: string): ActionProposalRecord {
+    const result = this.db
+      .prepare(
+        `UPDATE action_proposals
+         SET status = 'cancelled', error = 'declined by the operator', updated_at = ?
+         WHERE id = ? AND session_id = ? AND status = 'pending'`,
+      )
+      .run(new Date().toISOString(), id, sessionId);
+    if (Number(result.changes) !== 1) throw new Error('action proposal is no longer pending');
+    const rejected = this.getActionProposal(id);
+    if (!rejected) throw new Error('action proposal not found');
+    return rejected;
+  }
+
   insertFinding(
     input: Omit<WebFindingRecord, 'id' | 'createdAt' | 'updatedAt'>,
   ): WebFindingRecord | undefined {

@@ -221,6 +221,17 @@ user, and capabilities; targets are sent through stdin. Safe scanner containers
 are read-only, non-root, capability-free, `no-new-privileges`, resource-limited,
 and receive no host mounts, Docker socket, home directory, or AI credentials.
 
+Use the workspace switcher to move between the traditional **Recon Board** and
+the **AI Operator** cockpit. AI Operator shows the current tool, execution
+queue, live event/output stream, scanner health, saved evidence count, AI
+analysis, ranked recommendations, findings, and permission gates in one view.
+`Analyze evidence with AI` sends the selected provider a bounded evidence
+envelope containing the current scope, run summary, recent typed-tool output,
+artifact hashes, findings, coverage, and scanner status. Target and scanner
+content is explicitly marked untrusted. Approval-gated scanners can be approved
+once or declined; either decision is audited and a declined proposal cannot be
+reused.
+
 DNSX and HTTPX are low-impact Recon actions when direct recon is enabled.
 Katana, Nuclei, FFUF, Nmap, and bounded finding validation create an
 operator-visible proposal instead of executing in

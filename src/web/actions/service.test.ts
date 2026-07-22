@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +17,49 @@ afterEach(() => {
 const supportsNodeSqlite = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10) >= 22;
 
 describe.skipIf(!supportsNodeSqlite)('approved scanner actions', () => {
+  it('lets the operator decline a pending action without executing it', async () => {
+    const { WebDatabase } = await import('../storage/database.js');
+    const root = mkdtempSync(join(tmpdir(), 'agent-workbench-actions-reject-'));
+    roots.push(root);
+    const database = new WebDatabase(join(root, 'db.sqlite3'));
+    const engagement = database.createEngagement(
+      'approved target',
+      createScope({ allowedHosts: ['example.com'], allowDirectLowImpactRecon: true }),
+      'RECON',
+    );
+    const session = database.createSession(engagement.id, 'scan', 'ollama', 'model');
+    const events = new EventHub(database);
+    const artifacts = new ArtifactStore(join(root, 'artifacts'), database);
+    const actions = new ActionService(
+      database,
+      artifacts,
+      events,
+      {} as unknown as DockerScannerRunner,
+    );
+    const proposal = actions.propose({
+      engagementId: engagement.id,
+      sessionId: session.id,
+      action: 'nmap_connect',
+      arguments: { inputArtifactId: randomUUID(), ports: [80, 443] },
+      reason: 'bounded port follow-up',
+      scopeVersion: engagement.scope.version,
+      mode: engagement.mode,
+    });
+
+    const rejected = actions.reject(proposal.id, session.id);
+
+    expect(rejected.status).toBe('cancelled');
+    expect(rejected.error).toBe('declined by the operator');
+    expect(database.eventsAfter(0, session.id).at(-1)?.type).toBe('action.rejected');
+    expect(() => actions.claim(proposal.id, proposal.approvalHash, 'browser-session')).toThrow(
+      'action proposal is no longer pending',
+    );
+    expect(() => actions.reject(proposal.id, session.id)).toThrow(
+      'action proposal is no longer pending',
+    );
+    database.close();
+  });
+
   it('creates only in-scope, unconfirmed findings and persistent coverage', async () => {
     const { WebDatabase } = await import('../storage/database.js');
     const root = mkdtempSync(join(tmpdir(), 'agent-workbench-actions-'));

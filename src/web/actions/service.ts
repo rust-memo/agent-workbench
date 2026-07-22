@@ -129,6 +129,26 @@ export class ActionService {
     return claimed;
   }
 
+  reject(proposalId: string, sessionId: string): ActionProposalRecord {
+    const proposal = this.database.getActionProposal(proposalId);
+    if (!proposal || proposal.sessionId !== sessionId) throw new Error('action proposal not found');
+    if (proposal.status !== 'pending') throw new Error('action proposal is no longer pending');
+    const rejected = this.database.rejectActionProposal(proposal.id, sessionId);
+    this.database.audit(sessionId, 'action.rejected', {
+      proposalId: rejected.id,
+      action: rejected.action,
+      approvalHash: rejected.approvalHash,
+    });
+    this.events.publish({
+      engagementId: rejected.engagementId,
+      sessionId: rejected.sessionId,
+      turnId: rejected.turnId,
+      type: 'action.rejected',
+      payload: publicProposal(rejected),
+    });
+    return rejected;
+  }
+
   async executeClaimed(proposal: ActionProposalRecord, signal: AbortSignal): Promise<void> {
     const engagement = this.database.getEngagement(proposal.engagementId);
     if (!engagement || engagement.scope.version !== proposal.scopeVersion)

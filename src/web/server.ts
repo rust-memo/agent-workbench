@@ -369,6 +369,12 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       .status(202)
       .json(runtime.approveAction(id, proposalId, body.approvalHash, browserSessionId));
   });
+  app.post('/api/v1/sessions/:id/actions/:proposalId/reject', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const proposalId = z.string().uuid().parse(req.params.proposalId);
+    z.object({}).strict().parse(req.body);
+    res.json(publicProposal(actions.reject(proposalId, id)));
+  });
   app.get('/api/v1/sessions/:id/findings', (req, res) => {
     const id = z.string().uuid().parse(req.params.id);
     if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
