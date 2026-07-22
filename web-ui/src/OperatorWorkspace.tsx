@@ -14,8 +14,8 @@ import type {
 } from './api';
 
 export type OperatorPage = 'run' | 'output';
-type OutputFilter = 'all' | 'tools' | 'ai';
-type ToolActivity = { id: string; name: string; detail: string; status: string };
+type StreamFilter = 'all' | 'tools' | 'ai';
+type ActivityItem = { id: string; tool: string; detail: string; status: string };
 
 export function OperatorWorkspace({
   engagement,
@@ -66,170 +66,179 @@ export function OperatorWorkspace({
   onTogglePassive: () => void;
   onToggleSubdomains: () => void;
 }): React.ReactElement {
-  const [outputFilter, setOutputFilter] = useState<OutputFilter>('all');
-  const outputRef = useRef<HTMLDivElement>(null);
+  const [filter, setFilter] = useState<StreamFilter>('all');
+  const [autoScroll, setAutoScroll] = useState(true);
+  const streamRef = useRef<HTMLDivElement>(null);
   const running =
     session?.state === 'running' || run?.status === 'running' || run?.status === 'queued';
   const pending = proposals.filter((proposal) => proposal.status === 'pending');
-  const activity = useMemo(
-    () => buildToolActivity(run, proposals, events),
-    [run, proposals, events],
-  );
-  const outputEvents = useMemo(() => filterOutput(events, outputFilter), [events, outputFilter]);
-  const aiText = useMemo(() => latestAiText(events), [events]);
+  const visibleEvents = useMemo(() => filterEvents(events, filter), [events, filter]);
+  const activity = useMemo(() => buildActivity(run, proposals, events), [run, proposals, events]);
   const recommendations = (run?.insights ?? []).filter(
     (insight) => insight.status === 'new' || insight.status === 'accepted',
   );
-  const operation = currentOperation(session, run, proposals);
-  const steps = run?.steps ?? defaultSteps();
-  const readyScanners = Object.values(status?.scanners ?? {}).filter(
-    (scanner) => scanner.available && scanner.enabled,
+  const scanners = Object.entries(status?.scanners ?? {});
+  const readyScanners = scanners.filter(
+    ([, scanner]) => scanner.available && scanner.enabled,
   ).length;
+  const provider = status?.providers.find((item) => item.provider === session?.provider);
 
   useEffect(() => {
-    if (page !== 'output') return;
-    const node = outputRef.current;
+    if (!autoScroll) return;
+    const node = streamRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   });
 
   return (
-    <section className="operator-v2">
-      <header className="operator-v2-bar">
-        <div className="operator-overview-v3">
-          <OverviewCard
-            icon="◎"
-            label="Target"
-            value={engagement?.scope.allowedHosts[0] ?? 'No target selected'}
-            detail={`${engagement?.scope.allowedHosts.length ?? 0} authorized host rules`}
-          />
-          <OverviewCard
-            icon="⌾"
-            label="Mode"
-            value={engagement?.mode ?? 'Not configured'}
-            detail={running ? 'Execution in progress' : 'Approval policies active'}
-            tone="green"
-          />
-          <OverviewCard
-            icon="✣"
-            label="Provider / Model"
-            value={
-              status?.providers.find((item) => item.provider === session?.provider)?.label ??
-              session?.provider ??
-              'No provider'
-            }
-            detail={session?.model ?? 'No model selected'}
-            tone="cyan"
-          />
-          <OverviewCard
-            icon="♢"
-            label="Scanner health"
-            value={readyScanners > 0 ? 'Healthy' : 'Needs attention'}
-            detail={`${readyScanners} scanners ready`}
-            tone={readyScanners > 0 ? 'green' : 'amber'}
-          />
-        </div>
-
-        <div className="operator-commandbar-v3">
-          <div className="operator-v2-scope">
-            <span className="eyebrow">AUTHORIZED SCOPE · v{engagement?.scope.version ?? 0}</span>
-            <strong>{engagement?.scope.allowedHosts.join(', ') ?? 'No scope selected'}</strong>
-          </div>
-
-          <nav className="operator-v2-pages" aria-label="AI Operator pages">
-            <button
-              type="button"
-              className={page === 'run' ? 'active' : ''}
-              onClick={() => onPageChange('run')}
-            >
-              <span>Run Control</span>
-              <small>{running ? 'live' : `${run?.progress ?? 0}%`}</small>
-            </button>
-            <button
-              type="button"
-              className={page === 'output' ? 'active' : ''}
-              onClick={() => onPageChange('output')}
-            >
-              <span>Output & Evidence</span>
-              <small>{events.length + artifacts.length}</small>
-            </button>
-          </nav>
-
-          <div className="operator-v2-controls">
-            <select
-              aria-label="Finder profile"
-              value={profile}
-              disabled={!session || running}
-              onChange={(event) => onProfile(event.target.value as ReconRun['profile'])}
-            >
-              <option value="quick">Quick</option>
-              <option value="standard">Standard</option>
-              <option value="advanced">Advanced</option>
-            </select>
-            {running ? (
-              <button type="button" className="stop" onClick={onCancel}>
-                Stop
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="start"
-                onClick={onStart}
-                disabled={!session || engagement?.mode !== 'RECON'}
-              >
-                Start finder
-              </button>
-            )}
-          </div>
-        </div>
+    <section className="mission-center">
+      <header className="mission-overview">
+        <MissionStat
+          icon="◎"
+          label="Target"
+          value={engagement?.scope.allowedHosts[0] ?? 'No target selected'}
+          detail={`${engagement?.scope.allowedHosts.length ?? 0} scope rules`}
+        />
+        <MissionStat
+          icon="⌾"
+          label="Mode"
+          value={engagement?.mode ?? 'Not configured'}
+          detail={running ? 'Operation in progress' : 'Ready for controlled execution'}
+          tone="green"
+        />
+        <MissionStat
+          icon="✣"
+          label="Provider / Model"
+          value={provider?.label ?? session?.provider ?? 'No provider'}
+          detail={session?.model ?? 'No model selected'}
+          tone="blue"
+        />
+        <MissionStat
+          icon="♢"
+          label="Scanner Health"
+          value={readyScanners > 0 ? 'Healthy' : 'Needs attention'}
+          detail={`${readyScanners} of ${scanners.length} ready`}
+          tone={readyScanners > 0 ? 'green' : 'amber'}
+        />
       </header>
 
-      {page === 'run' ? (
-        <RunPage
-          engagement={engagement}
-          session={session}
+      <div className="mission-toolbar">
+        <div className="mission-scope">
+          <span>Authorized scope · v{engagement?.scope.version ?? 0}</span>
+          <strong>{engagement?.scope.allowedHosts.join(' · ') ?? 'No scope selected'}</strong>
+        </div>
+
+        <nav className="mission-pages" aria-label="Operator view">
+          <button
+            type="button"
+            className={page === 'run' ? 'active' : ''}
+            onClick={() => onPageChange('run')}
+          >
+            Live session <small>{running ? 'live' : `${run?.progress ?? 0}%`}</small>
+          </button>
+          <button
+            type="button"
+            className={page === 'output' ? 'active' : ''}
+            onClick={() => onPageChange('output')}
+          >
+            Evidence <small>{artifacts.length + findings.length}</small>
+          </button>
+        </nav>
+
+        <div className="mission-actions">
+          <details className="mission-policy">
+            <summary>Policy</summary>
+            <div>
+              <button
+                type="button"
+                className={engagement?.scope.allowThirdPartyPassiveSources ? 'enabled' : ''}
+                disabled={!engagement || running || policyBusy}
+                onClick={onTogglePassive}
+              >
+                Passive sources
+                <span>
+                  {engagement?.scope.allowThirdPartyPassiveSources ? 'Allowed' : 'Approval needed'}
+                </span>
+              </button>
+              <button
+                type="button"
+                className={
+                  engagement?.scope.allowedHosts.some((host) => host.startsWith('*.'))
+                    ? 'enabled'
+                    : ''
+                }
+                disabled={!engagement || running || policyBusy}
+                onClick={onToggleSubdomains}
+              >
+                Subdomains
+                <span>
+                  {engagement?.scope.allowedHosts.some((host) => host.startsWith('*.'))
+                    ? 'In scope'
+                    : 'Discovery only'}
+                </span>
+              </button>
+            </div>
+          </details>
+          <select
+            aria-label="Finder profile"
+            value={profile}
+            disabled={!session || running}
+            onChange={(event) => onProfile(event.target.value as ReconRun['profile'])}
+          >
+            <option value="quick">Quick</option>
+            <option value="standard">Standard</option>
+            <option value="advanced">Advanced</option>
+          </select>
+          {running ? (
+            <button type="button" className="mission-stop" onClick={onCancel}>
+              Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="mission-start"
+              disabled={!session || engagement?.mode !== 'RECON'}
+              onClick={onStart}
+            >
+              Start finder
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className={`mission-body ${page}`}>
+        <Transcript
+          title={page === 'run' ? 'Session Transcript' : 'Output & Evidence Stream'}
+          events={visibleEvents}
+          filter={filter}
+          onFilter={setFilter}
+          autoScroll={autoScroll}
+          onAutoScroll={setAutoScroll}
+          streamRef={streamRef}
           run={run}
-          operation={operation}
-          running={running}
-          steps={steps}
-          activity={activity}
+        />
+
+        <MissionRail
+          page={page}
           pending={pending}
-          aiText={aiText}
-          recommendations={recommendations}
           artifacts={artifacts}
           findings={findings}
-          readyScanners={readyScanners}
+          coverage={coverage}
+          activity={activity}
+          scanners={scanners}
+          events={events}
+          recommendations={recommendations}
           analyzing={analyzing}
-          policyBusy={policyBusy}
-          onStart={onStart}
           onAnalyze={onAnalyze}
           onApprove={onApprove}
           onReject={onReject}
           onLoadSkill={onLoadSkill}
-          onTogglePassive={onTogglePassive}
-          onToggleSubdomains={onToggleSubdomains}
-          onOpenOutput={() => onPageChange('output')}
         />
-      ) : (
-        <OutputPage
-          events={outputEvents}
-          outputFilter={outputFilter}
-          setOutputFilter={setOutputFilter}
-          outputRef={outputRef}
-          activity={activity}
-          artifacts={artifacts}
-          findings={findings}
-          coverage={coverage}
-          status={status}
-          pending={pending}
-          onApprove={onApprove}
-          onReject={onReject}
-        />
-      )}
+      </div>
     </section>
   );
 }
 
-function OverviewCard({
+function MissionStat({
   icon,
   label,
   value,
@@ -240,632 +249,421 @@ function OverviewCard({
   label: string;
   value: string;
   detail: string;
-  tone?: 'neutral' | 'green' | 'cyan' | 'amber';
+  tone?: 'neutral' | 'green' | 'blue' | 'amber';
 }): React.ReactElement {
   return (
-    <article className={`overview-card-v3 ${tone}`}>
-      <span className="overview-icon-v3" aria-hidden="true">
-        {icon}
-      </span>
+    <article className={`mission-stat ${tone}`}>
+      <i>{icon}</i>
       <div>
-        <small>{label}</small>
+        <span>{label}</span>
         <strong>{value}</strong>
-        <span>{detail}</span>
+        <small>{detail}</small>
       </div>
     </article>
   );
 }
 
-function RunPage({
-  engagement,
-  session,
+function Transcript({
+  title,
+  events,
+  filter,
+  onFilter,
+  autoScroll,
+  onAutoScroll,
+  streamRef,
   run,
-  operation,
-  running,
-  steps,
-  activity,
+}: {
+  title: string;
+  events: RuntimeEvent[];
+  filter: StreamFilter;
+  onFilter: (filter: StreamFilter) => void;
+  autoScroll: boolean;
+  onAutoScroll: (value: boolean) => void;
+  streamRef: React.RefObject<HTMLDivElement | null>;
+  run?: ReconRun;
+}): React.ReactElement {
+  return (
+    <section className="transcript-card">
+      <header>
+        <div>
+          <strong>{title}</strong>
+          <span className="stream-state">
+            <i /> Streaming
+          </span>
+        </div>
+        <div className="transcript-controls">
+          <div className="stream-filters">
+            {(['all', 'tools', 'ai'] as const).map((item) => (
+              <button
+                type="button"
+                className={filter === item ? 'active' : ''}
+                onClick={() => onFilter(item)}
+                key={item}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+          <label>
+            Auto-scroll
+            <input
+              type="checkbox"
+              checked={autoScroll}
+              onChange={(event) => onAutoScroll(event.target.checked)}
+            />
+            <span />
+          </label>
+        </div>
+      </header>
+
+      {run && (
+        <div className="transcript-progress">
+          <div>
+            <span>{run.currentStep ?? run.status}</span>
+            <strong>{run.progress}%</strong>
+          </div>
+          <i>
+            <b style={{ width: `${run.progress}%` }} />
+          </i>
+        </div>
+      )}
+
+      <div className="transcript-stream" ref={streamRef} role="log" aria-live="polite">
+        {events.slice(-240).map((event) => (
+          <article className={eventTone(event)} key={event.eventId}>
+            <time>{formatTime(event.createdAt)}</time>
+            <span>{eventLabel(event)}</span>
+            <pre>{eventText(event)}</pre>
+          </article>
+        ))}
+        {events.length === 0 && (
+          <div className="transcript-empty">
+            <span>&gt;_</span>
+            <strong>Waiting for the first operation</strong>
+            <p>Tool calls, AI analysis, approvals, and saved evidence will stream here.</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function MissionRail({
+  page,
   pending,
-  aiText,
-  recommendations,
   artifacts,
   findings,
-  readyScanners,
+  coverage,
+  activity,
+  scanners,
+  events,
+  recommendations,
   analyzing,
-  policyBusy,
-  onStart,
   onAnalyze,
   onApprove,
   onReject,
   onLoadSkill,
-  onTogglePassive,
-  onToggleSubdomains,
-  onOpenOutput,
 }: {
-  engagement?: Engagement;
-  session?: Session;
-  run?: ReconRun;
-  operation: { label: string; detail: string; kind: string };
-  running: boolean;
-  steps: ReconRun['steps'];
-  activity: ToolActivity[];
+  page: OperatorPage;
   pending: ActionProposal[];
-  aiText: string;
-  recommendations: ReconInsight[];
   artifacts: Artifact[];
   findings: Finding[];
-  readyScanners: number;
+  coverage: CoverageResponse;
+  activity: ActivityItem[];
+  scanners: Array<
+    [string, { available: boolean; detail: string; profile: 'safe' | 'raw'; enabled: boolean }]
+  >;
+  events: RuntimeEvent[];
+  recommendations: ReconInsight[];
   analyzing: boolean;
-  policyBusy: boolean;
-  onStart: () => void;
   onAnalyze: () => void;
   onApprove: (proposal: ActionProposal) => void;
   onReject: (proposal: ActionProposal) => void;
   onLoadSkill: (name: string, target?: string) => void;
-  onTogglePassive: () => void;
-  onToggleSubdomains: () => void;
-  onOpenOutput: () => void;
 }): React.ReactElement {
-  const nextActivity = activity.filter((item) => !['completed', 'skipped'].includes(item.status));
-  const passiveEnabled = engagement?.scope.allowThirdPartyPassiveSources ?? false;
-  const subdomainsEnabled =
-    engagement?.scope.allowedHosts.some((host) => host.startsWith('*.')) ?? false;
-  return (
-    <div className="run-page-v2">
-      <section className={`run-hero-v2 ${operation.kind}`}>
-        <div className="run-state-v2">
-          <span className={`run-orb ${running ? 'live' : ''}`} />
-          <div>
-            <span className="eyebrow">{running ? 'RUNNING NOW' : 'CURRENT STATE'}</span>
-            <h2>{operation.label}</h2>
-            <p>{operation.detail}</p>
-          </div>
-        </div>
-        <div className="run-progress-v2">
-          <div>
-            <strong>{run?.progress ?? 0}%</strong>
-            <span>complete</span>
-          </div>
-          <div className="progress-line">
-            <i style={{ width: `${run?.progress ?? 0}%` }} />
-          </div>
-        </div>
-        <dl className="run-facts-v2">
-          <div>
-            <dt>Evidence</dt>
-            <dd>{artifacts.length}</dd>
-          </div>
-          <div>
-            <dt>Signals</dt>
-            <dd>{findings.length}</dd>
-          </div>
-          <div>
-            <dt>Scanners</dt>
-            <dd>{readyScanners} ready</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section className="pipeline-v2" aria-label="Recon pipeline">
-        {steps.map((step, index) => (
-          <article className={step.status} key={step.id}>
-            <span>{step.status === 'completed' ? '✓' : String(index + 1).padStart(2, '0')}</span>
-            <div>
-              <strong>{toolForStep(step.key)}</strong>
-              <small>{step.detail ?? step.label}</small>
-            </div>
-          </article>
-        ))}
-      </section>
-
-      {!passiveEnabled && (
-        <section className="quiet-notice warning">
-          <div>
-            <strong>Subfinder is disabled</strong>
-            <p>Passive discovery will be skipped until you approve third-party passive sources.</p>
-          </div>
-          <button type="button" onClick={onStart} disabled={!session || running}>
-            Enable & start
-          </button>
-        </section>
-      )}
-
-      <div className="run-columns-v2">
-        <section className="quiet-card execution-card-v2">
-          <header>
-            <div>
-              <span className="eyebrow">EXECUTION</span>
-              <h3>What happens next</h3>
-            </div>
-            <button type="button" onClick={onOpenOutput}>
-              Open live output →
-            </button>
-          </header>
-          <div className="next-actions-v2">
-            {(nextActivity.length ? nextActivity : activity.slice(-4)).slice(0, 6).map((item) => (
-              <article className={item.status} key={item.id}>
-                <i />
-                <div>
-                  <strong>{item.name}</strong>
-                  <small>{item.detail}</small>
-                </div>
-                <span>{item.status.replace('_', ' ')}</span>
-              </article>
-            ))}
-            {activity.length === 0 && (
-              <Empty text="Start a scoped run. Only the active and next steps will stay on this page." />
-            )}
-          </div>
-          <footer className="policy-row-v2">
-            <button
-              type="button"
-              className={passiveEnabled ? 'enabled' : ''}
-              onClick={onTogglePassive}
-              disabled={!engagement || running || policyBusy}
-            >
-              Subfinder {passiveEnabled ? 'enabled' : 'disabled'}
-            </button>
-            <button
-              type="button"
-              className={subdomainsEnabled ? 'enabled' : ''}
-              onClick={onToggleSubdomains}
-              disabled={!engagement || running || policyBusy}
-            >
-              Subdomains {subdomainsEnabled ? 'in scope' : 'discovery only'}
-            </button>
-          </footer>
-        </section>
-
-        <section className="quiet-card ai-brief-v2">
-          <header>
-            <div>
-              <span className="eyebrow">AI BRIEF</span>
-              <h3>Assessment & recommendations</h3>
-            </div>
-            <button
-              type="button"
-              onClick={onAnalyze}
-              disabled={!session || running || analyzing || (!run && artifacts.length === 0)}
-            >
-              {analyzing ? 'Dispatching…' : 'Analyze evidence'}
-            </button>
-          </header>
-          <pre>
-            {aiText ||
-              'When evidence is ready, the selected AI will summarize what ran, what was observed, and the safest high-value next action.'}
-          </pre>
-          <div className="recommendations-v2">
-            {recommendations.slice(0, 3).map((insight) => (
-              <Recommendation key={insight.id} insight={insight} onLoadSkill={onLoadSkill} />
-            ))}
-            {recommendations.length === 0 && <Empty text="No recommendations yet." />}
-          </div>
-        </section>
-      </div>
-
-      {pending[0] && (
-        <section className="permission-bar-v2">
-          <div>
-            <span>PERMISSION REQUIRED · {pending[0].risk}</span>
-            <strong>{pending[0].action}</strong>
-            <p>{pending[0].reason}</p>
-          </div>
-          <div>
-            <button
-              type="button"
-              className="decline"
-              onClick={() => onReject(pending[0] as ActionProposal)}
-            >
-              Decline
-            </button>
-            <button
-              type="button"
-              className="approve"
-              onClick={() => onApprove(pending[0] as ActionProposal)}
-            >
-              Review & run once
-            </button>
-          </div>
-        </section>
-      )}
-    </div>
-  );
-}
-
-function OutputPage({
-  events,
-  outputFilter,
-  setOutputFilter,
-  outputRef,
-  activity,
-  artifacts,
-  findings,
-  coverage,
-  status,
-  pending,
-  onApprove,
-  onReject,
-}: {
-  events: RuntimeEvent[];
-  outputFilter: OutputFilter;
-  setOutputFilter: (filter: OutputFilter) => void;
-  outputRef: React.RefObject<HTMLDivElement | null>;
-  activity: ToolActivity[];
-  artifacts: Artifact[];
-  findings: Finding[];
-  coverage: CoverageResponse;
-  status: WorkbenchStatus | null;
-  pending: ActionProposal[];
-  onApprove: (proposal: ActionProposal) => void;
-  onReject: (proposal: ActionProposal) => void;
-}): React.ReactElement {
-  const coverageTotal = coverage.summary.total ?? 0;
-  const coverageDone = Math.max(0, coverageTotal - (coverage.summary.untested ?? 0));
-  const coveragePercent = coverageTotal > 0 ? Math.round((coverageDone / coverageTotal) * 100) : 0;
-  const severityCounts = findings.reduce<Record<string, number>>((counts, finding) => {
-    counts[finding.severity] = (counts[finding.severity] ?? 0) + 1;
-    return counts;
+  const totalCoverage = coverage.summary.total ?? coverage.rows.length;
+  const completedCoverage = Math.max(0, totalCoverage - (coverage.summary.untested ?? 0));
+  const coveragePercent = totalCoverage ? Math.round((completedCoverage / totalCoverage) * 100) : 0;
+  const severity = findings.reduce<Record<string, number>>((result, finding) => {
+    result[finding.severity] = (result[finding.severity] ?? 0) + 1;
+    return result;
   }, {});
-  return (
-    <div className="output-page-v2">
-      <section className="output-console-v2">
-        <header>
-          <div>
-            <span className="eyebrow">SESSION TRANSCRIPT</span>
-            <h2>Live operation stream</h2>
-          </div>
-          <div className="output-console-actions-v3">
-            <span className="streaming-indicator-v3">
-              <i /> Streaming
-            </span>
-            <div className="output-filters-v2">
-              {(['all', 'tools', 'ai'] as const).map((filter) => (
-                <button
-                  type="button"
-                  className={outputFilter === filter ? 'active' : ''}
-                  onClick={() => setOutputFilter(filter)}
-                  key={filter}
-                >
-                  {filter}
-                </button>
-              ))}
-            </div>
-          </div>
-        </header>
-        <div className="output-stream-v2" ref={outputRef} role="log" aria-live="polite">
-          {events.slice(-200).map((event) => (
-            <article className={eventTone(event)} key={event.eventId}>
-              <div>
-                <time>{new Date(event.createdAt).toLocaleTimeString()}</time>
-                <span>{event.type}</span>
-              </div>
-              <pre>{operatorEventText(event)}</pre>
-            </article>
-          ))}
-          {events.length === 0 && <Empty text="No output for this filter yet." />}
-        </div>
-      </section>
 
-      <aside className="evidence-panel-v2">
-        <header>
-          <div>
-            <span className="eyebrow">MISSION DETAILS</span>
-            <h2>Evidence & control</h2>
-          </div>
-          <strong>{artifacts.length}</strong>
-        </header>
-        {pending[0] && (
-          <section className="output-approval-v3">
-            <header>
-              <strong>Approval required</strong>
-              <span>1 pending</span>
-            </header>
-            <h3>{pending[0].action}</h3>
-            <p>{pending[0].reason}</p>
-            <small>Risk: {pending[0].risk} · one-time authorization</small>
-            <div>
-              <button type="button" className="approve" onClick={() => onApprove(pending[0])}>
-                ✓ Approve
-              </button>
-              <button type="button" className="decline" onClick={() => onReject(pending[0])}>
-                × Deny
-              </button>
-            </div>
-          </section>
-        )}
-        <details open>
-          <summary>
-            Tool activity <span>{activity.length}</span>
-          </summary>
-          <div className="detail-list-v2">
+  return (
+    <aside className="mission-rail">
+      <ApprovalPanel proposal={pending[0]} onApprove={onApprove} onReject={onReject} />
+
+      {page === 'output' && (
+        <RailCard title="Tool activity" count={activity.length} className="tool-activity-card">
+          <div className="rail-list">
             {activity
-              .slice(-10)
+              .slice(-5)
               .reverse()
               .map((item) => (
                 <article key={item.id}>
+                  <span className={`rail-dot ${item.status}`} />
                   <div>
-                    <strong>{item.name}</strong>
-                    <span className={item.status}>{item.status}</span>
+                    <strong>{item.tool}</strong>
+                    <small>{item.detail}</small>
                   </div>
-                  <p>{item.detail}</p>
+                  <em>{item.status}</em>
                 </article>
               ))}
+            {activity.length === 0 && <RailEmpty text="No tool activity yet." />}
           </div>
-        </details>
-        <details open>
-          <summary>
-            Saved artifacts <span>{artifacts.length}</span>
-          </summary>
-          <div className="detail-list-v2">
-            {artifacts.slice(0, 8).map((artifact) => (
-              <article key={artifact.id}>
-                <div>
-                  <strong>{artifact.filename}</strong>
-                  <span>{formatBytes(artifact.size)}</span>
-                </div>
-                <p>
-                  {artifact.kind} · sha256 {artifact.sha256.slice(0, 12)}…
-                </p>
-              </article>
-            ))}
-            {artifacts.length === 0 && <Empty text="No saved evidence." />}
-          </div>
-        </details>
-        <details open>
-          <summary>
-            Findings <span>{findings.length}</span>
-          </summary>
-          {findings.length > 0 && (
-            <div className="finding-bars-v3">
-              {(['critical', 'high', 'medium', 'low'] as const).map((severity) => (
-                <div key={severity}>
-                  <span>{severity}</span>
-                  <i>
-                    <b
-                      style={{
-                        width: `${Math.min(100, ((severityCounts[severity] ?? 0) / findings.length) * 100)}%`,
-                      }}
-                    />
-                  </i>
-                  <strong>{severityCounts[severity] ?? 0}</strong>
-                </div>
-              ))}
+        </RailCard>
+      )}
+
+      <RailCard title="Artifacts" count={artifacts.length}>
+        <div className="artifact-peek">
+          {artifacts.slice(-3).map((artifact) => (
+            <article key={artifact.id}>
+              <span>▱</span>
+              <strong>{artifact.filename}</strong>
+              <time>{formatTime(artifact.createdAt)}</time>
+            </article>
+          ))}
+          {artifacts.length === 0 && <RailEmpty text="No evidence saved yet." />}
+        </div>
+      </RailCard>
+
+      <RailCard title="Findings" count={findings.length}>
+        <div className="severity-bars">
+          {(['critical', 'high', 'medium', 'low'] as const).map((level) => (
+            <div key={level}>
+              <span>{level}</span>
+              <i>
+                <b
+                  style={{
+                    width: `${findings.length ? ((severity[level] ?? 0) / findings.length) * 100 : 0}%`,
+                  }}
+                />
+              </i>
+              <strong>{severity[level] ?? 0}</strong>
             </div>
-          )}
-          <div className="detail-list-v2 findings">
-            {findings.slice(0, 8).map((finding) => (
-              <article key={finding.id}>
-                <div>
-                  <strong>{finding.title}</strong>
-                  <span className={finding.severity}>{finding.severity}</span>
-                </div>
-                <p>
-                  {finding.status} · {finding.url}
-                </p>
-              </article>
-            ))}
-            {findings.length === 0 && <Empty text="No scanner signals." />}
-          </div>
-        </details>
-        <details open>
-          <summary>
-            Coverage <span>{coveragePercent}%</span>
-          </summary>
-          <div className="coverage-progress-v3">
-            <i>
-              <b style={{ width: `${coveragePercent}%` }} />
-            </i>
-            <span>
-              {coverageDone} of {coverageTotal} checks exercised
-            </span>
-          </div>
-          <div className="coverage-v2">
-            {['untested', 'tried', 'passed', 'failed', 'skipped'].map((key) => (
-              <span key={key}>
-                <strong>{coverage.summary[key] ?? 0}</strong>
-                {key}
-              </span>
-            ))}
-          </div>
-          <div className="scanner-list-v2">
-            {Object.entries(status?.scanners ?? {}).map(([name, scanner]) => (
-              <span className={scanner.available && scanner.enabled ? 'ready' : ''} key={name}>
-                <i />
-                {name}
-              </span>
-            ))}
-          </div>
-        </details>
-        <section className="audit-card-v3">
+          ))}
+        </div>
+      </RailCard>
+
+      <RailCard title="Coverage" count={`${coveragePercent}%`}>
+        <div className="coverage-peek">
+          <i>
+            <b style={{ width: `${coveragePercent}%` }} />
+          </i>
+          <span>
+            {completedCoverage} of {totalCoverage} checks exercised
+          </span>
           <div>
-            <span className="eyebrow">AUDIT</span>
-            <strong>All actions recorded</strong>
+            {scanners.map(([name, scanner]) => (
+              <small className={scanner.available && scanner.enabled ? 'ready' : ''} key={name}>
+                <i /> {name}
+              </small>
+            ))}
           </div>
-          <span>{events.length} events</span>
-        </section>
-      </aside>
-    </div>
+        </div>
+      </RailCard>
+
+      <RailCard
+        title="AI assessment"
+        action={analyzing ? 'Analyzing…' : 'Analyze'}
+        onAction={onAnalyze}
+      >
+        <div className="recommendation-peek">
+          {recommendations.slice(0, 2).map((insight) => (
+            <article key={insight.id}>
+              <span>{insight.priority}</span>
+              <div>
+                <strong>{insight.title}</strong>
+                <p>{insight.rationale}</p>
+              </div>
+              {insight.skill && (
+                <button
+                  type="button"
+                  onClick={() => insight.skill && onLoadSkill(insight.skill, insight.target)}
+                >
+                  /{insight.skill}
+                </button>
+              )}
+            </article>
+          ))}
+          {recommendations.length === 0 && (
+            <RailEmpty text="Analyze evidence for ranked next steps." />
+          )}
+        </div>
+      </RailCard>
+
+      <section className="audit-strip">
+        <span>Audit</span>
+        <strong>All actions recorded</strong>
+        <small>{events.length} events</small>
+      </section>
+    </aside>
   );
 }
 
-function Recommendation({
-  insight,
-  onLoadSkill,
+function ApprovalPanel({
+  proposal,
+  onApprove,
+  onReject,
 }: {
-  insight: ReconInsight;
-  onLoadSkill: (name: string, target?: string) => void;
+  proposal?: ActionProposal;
+  onApprove: (proposal: ActionProposal) => void;
+  onReject: (proposal: ActionProposal) => void;
 }): React.ReactElement {
   return (
-    <article className={`recommendation-v2 ${insight.priority}`}>
-      <div>
-        <span>{insight.priority}</span>
-        <strong>{insight.title}</strong>
-      </div>
-      <p>{insight.rationale}</p>
-      {insight.skill && (
-        <button
-          type="button"
-          onClick={() => insight.skill && onLoadSkill(insight.skill, insight.target)}
-        >
-          Load /{insight.skill}
-        </button>
+    <section className={`approval-panel ${proposal ? 'pending' : 'clear'}`}>
+      <header>
+        <strong>Approvals</strong>
+        <span>{proposal ? '1 pending' : 'Clear'}</span>
+      </header>
+      {proposal ? (
+        <>
+          <h3>{proposal.action}</h3>
+          <dl>
+            <div>
+              <dt>Risk</dt>
+              <dd>{proposal.risk}</dd>
+            </div>
+            <div>
+              <dt>Authorization</dt>
+              <dd>Single use</dd>
+            </div>
+          </dl>
+          <p>{proposal.reason}</p>
+          <div className="approval-buttons">
+            <button type="button" className="approve" onClick={() => onApprove(proposal)}>
+              ✓ Approve
+            </button>
+            <button type="button" className="deny" onClick={() => onReject(proposal)}>
+              × Deny
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="approval-clear">
+          <i>✓</i>
+          <p>No action is waiting for authorization.</p>
+        </div>
       )}
-    </article>
+    </section>
   );
 }
 
-function Empty({ text }: { text: string }): React.ReactElement {
-  return <div className="empty-v2">{text}</div>;
-}
-
-function currentOperation(
-  session: Session | undefined,
-  run: ReconRun | undefined,
-  proposals: ActionProposal[],
-): { label: string; detail: string; kind: string } {
-  const action = proposals.find((proposal) => proposal.status === 'running');
-  const step = run?.steps.find((item) => item.status === 'running');
-  const pending = proposals.find((proposal) => proposal.status === 'pending');
-  if (action)
-    return {
-      label: action.action,
-      detail: 'Approved scanner is running inside its isolated container.',
-      kind: 'scanner',
-    };
-  if (step) return { label: toolForStep(step.key), detail: step.label, kind: 'recon' };
-  if (session?.state === 'running')
-    return {
-      label: 'AI is analyzing',
-      detail: `${session.provider} / ${session.model}`,
-      kind: 'ai',
-    };
-  if (pending)
-    return {
-      label: `${pending.action} needs permission`,
-      detail: 'Review the exact action before it can continue.',
-      kind: 'approval',
-    };
-  return {
-    label: 'Ready for the next run',
-    detail: 'Nothing is executing on the target.',
-    kind: 'idle',
-  };
-}
-
-function defaultSteps(): ReconRun['steps'] {
-  return ['scope', 'passive', 'dns', 'http', 'analysis'].map(
-    (key, index) =>
-      ({
-        id: key,
-        key,
-        label: key === 'passive' ? 'Passive discovery' : key,
-        status: 'pending',
-        metrics: {},
-        ordinal: index,
-      }) as ReconRun['steps'][number],
+function RailCard({
+  title,
+  count,
+  action,
+  onAction,
+  className = '',
+  children,
+}: {
+  title: string;
+  count?: number | string;
+  action?: string;
+  onAction?: () => void;
+  className?: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <section className={`rail-card ${className}`}>
+      <header>
+        <strong>{title}</strong>
+        {action ? (
+          <button type="button" onClick={onAction}>
+            {action}
+          </button>
+        ) : (
+          <span>{count}</span>
+        )}
+      </header>
+      {children}
+    </section>
   );
 }
 
-function filterOutput(events: RuntimeEvent[], filter: OutputFilter): RuntimeEvent[] {
+function RailEmpty({ text }: { text: string }): React.ReactElement {
+  return <p className="rail-empty">{text}</p>;
+}
+
+function filterEvents(events: RuntimeEvent[], filter: StreamFilter): RuntimeEvent[] {
   return events.filter((event) => {
     if (filter === 'tools')
       return (
-        event.type.startsWith('agent.tool') ||
+        event.type.includes('tool') ||
         event.type.startsWith('recon.') ||
         event.type.startsWith('action.') ||
         event.type === 'artifact.saved'
       );
     if (filter === 'ai')
-      return (
-        event.type.startsWith('agent.assistant') ||
-        event.type === 'agent.decision' ||
-        event.type === 'provider.cloud-preview'
-      );
+      return event.type.startsWith('agent.assistant') || event.type === 'agent.decision';
     return true;
   });
 }
 
-function buildToolActivity(
+function buildActivity(
   run: ReconRun | undefined,
   proposals: ActionProposal[],
   events: RuntimeEvent[],
-): ToolActivity[] {
+): ActivityItem[] {
   const steps = (run?.steps ?? []).map((step) => ({
     id: `step-${step.id}`,
-    name: toolForStep(step.key),
+    tool: stepTool(step.key),
     detail: step.detail ?? step.label,
     status: step.status,
   }));
-  const actions = [...proposals]
-    .reverse()
-    .slice(-8)
-    .map((proposal) => ({
-      id: `action-${proposal.id}`,
-      name: proposal.action,
-      detail: proposal.reason,
-      status: proposal.status,
-    }));
-  const results = new Map(
+  const actions = proposals.map((proposal) => ({
+    id: `action-${proposal.id}`,
+    tool: proposal.action,
+    detail: proposal.reason,
+    status: proposal.status,
+  }));
+  const toolResults = new Set(
     events
-      .filter((event) => event.type === 'agent.tool-result' && typeof event.payload.id === 'string')
-      .map((event) => [String(event.payload.id), event]),
+      .filter((event) => event.type === 'agent.tool-result')
+      .map((event) => String(event.payload.id ?? '')),
   );
   const calls = events
-    .filter((event) => event.type === 'agent.tool-call' && typeof event.payload.id === 'string')
-    .slice(-8)
-    .map((event) => {
-      const result = results.get(String(event.payload.id));
-      return {
-        id: `agent-${String(event.payload.id)}`,
-        name: String(event.payload.name ?? 'typed tool'),
-        detail: result
-          ? `${Number(result.payload.durationMs) || 0} ms · result returned to AI`
-          : 'AI requested this typed action',
-        status: result ? (result.payload.err ? 'failed' : 'completed') : 'running',
-      };
-    });
-  return [...steps, ...actions, ...calls].slice(-18);
+    .filter((event) => event.type === 'agent.tool-call')
+    .map((event) => ({
+      id: `tool-${String(event.payload.id ?? event.eventId)}`,
+      tool: String(event.payload.name ?? 'typed tool'),
+      detail: toolResults.has(String(event.payload.id ?? ''))
+        ? 'Result returned to the AI'
+        : 'Requested by the AI',
+      status: toolResults.has(String(event.payload.id ?? '')) ? 'completed' : 'running',
+    }));
+  return [...steps, ...actions, ...calls].slice(-24);
 }
 
-function toolForStep(step: string): string {
+function stepTool(key: string): string {
   return (
     { scope: 'scope', passive: 'subfinder', dns: 'dnsx', http: 'httpx', analysis: 'analysis' }[
-      step
-    ] ?? step
+      key
+    ] ?? key
   );
-}
-
-function latestAiText(events: RuntimeEvent[]): string {
-  const lastTurn = events.map((event) => event.type).lastIndexOf('turn.started');
-  const current = lastTurn >= 0 ? events.slice(lastTurn) : events;
-  const complete = [...current]
-    .reverse()
-    .find(
-      (event) => event.type === 'agent.assistant-text' && typeof event.payload.text === 'string',
-    );
-  if (complete) return String(complete.payload.text).slice(0, 12_000);
-  return current
-    .filter(
-      (event) => event.type === 'agent.assistant-delta' && typeof event.payload.text === 'string',
-    )
-    .map((event) => String(event.payload.text))
-    .join('')
-    .slice(-12_000);
 }
 
 function eventTone(event: RuntimeEvent): string {
   if (event.type.includes('failed') || event.type.includes('error')) return 'error';
+  if (event.type.includes('approval') || event.type.endsWith('.proposed')) return 'approval';
   if (event.type.startsWith('agent.assistant') || event.type === 'agent.decision') return 'ai';
-  if (
-    event.type.includes('tool') ||
-    event.type.startsWith('recon.') ||
-    event.type.startsWith('action.')
-  )
-    return 'tool';
-  if (event.type === 'artifact.saved') return 'saved';
+  if (event.type === 'artifact.saved') return 'artifact';
+  if (event.type.includes('tool') || event.type.startsWith('action.')) return 'scan';
+  if (event.type.startsWith('recon.')) return 'recon';
   return 'system';
 }
 
-function operatorEventText(event: RuntimeEvent): string {
+function eventLabel(event: RuntimeEvent): string {
+  const tone = eventTone(event);
+  if (tone === 'ai') return 'ai';
+  if (tone === 'artifact') return 'artifact';
+  if (tone === 'scan') return 'scan';
+  if (tone === 'approval') return 'approval';
+  if (tone === 'recon') return 'recon';
+  return 'system';
+}
+
+function eventText(event: RuntimeEvent): string {
   const payload = event.payload;
   const value =
     typeof payload.text === 'string'
@@ -876,10 +674,23 @@ function operatorEventText(event: RuntimeEvent): string {
           ? payload.error
           : event.type === 'turn.started' && typeof payload.message === 'string'
             ? payload.message
-            : JSON.stringify(payload, null, 2);
+            : compactPayload(payload);
   return String(value).slice(0, 20_000);
 }
 
-function formatBytes(value: number): string {
-  return value < 1024 ? `${value} B` : `${(value / 1024).toFixed(1)} KB`;
+function compactPayload(payload: Record<string, unknown>): string {
+  const entries = Object.entries(payload).filter(([, value]) => value !== undefined);
+  if (entries.length === 0) return 'Event recorded';
+  if (entries.length <= 3 && entries.every(([, value]) => typeof value !== 'object'))
+    return entries.map(([key, value]) => `${key}: ${String(value)}`).join(' · ');
+  return JSON.stringify(payload, null, 2);
+}
+
+function formatTime(value: string): string {
+  return new Date(value).toLocaleTimeString([], {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }

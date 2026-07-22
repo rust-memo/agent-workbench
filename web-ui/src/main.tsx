@@ -27,6 +27,7 @@ import {
   restoreSession,
 } from './api';
 import './styles.css';
+import './command-center.css';
 
 const SIDEBAR_COLLAPSED_KEY = 'agent-workbench:sessions-sidebar-collapsed';
 const WORKSPACE_VIEW_KEY = 'agent-workbench:workspace-view';
@@ -82,7 +83,7 @@ function App(): React.ReactElement {
   const [cancellingSession, setCancellingSession] = useState('');
   const [error, setError] = useState('');
   const [clearedThrough, setClearedThrough] = useState<Record<string, number>>({});
-  const [sidebarWidth, setSidebarWidth] = useState(250);
+  const [sidebarWidth, setSidebarWidth] = useState(232);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [inspectorWidth, setInspectorWidth] = useState(330);
   const [terminalCompact, setTerminalCompact] = useState(false);
@@ -753,8 +754,8 @@ function App(): React.ReactElement {
                 setOperatorPage('run');
               }}
             >
-              <i>◉</i>
-              <span>Engagement</span>
+              <i>⬡</i>
+              <span>AI Operator</span>
               <b>›</b>
             </button>
             <button
@@ -838,13 +839,11 @@ function App(): React.ReactElement {
             </div>
           )}
           {workspaceView === 'recon' && (
-            <>
-              <div className="section-title inspector-gap">
+            <details className="legacy-disclosure">
+              <summary>
                 <span>Legacy JSON</span>
-                <span className="count">
-                  {legacySessions.filter((item) => !item.imported).length}
-                </span>
-              </div>
+                <strong>{legacySessions.filter((item) => !item.imported).length}</strong>
+              </summary>
               <div className="legacy-list">
                 {legacySessions.slice(0, 5).map((legacy) => (
                   <article className="legacy-card" key={legacy.id}>
@@ -863,7 +862,7 @@ function App(): React.ReactElement {
                   <div className="empty compact">No CLI JSON sessions.</div>
                 )}
               </div>
-            </>
+            </details>
           )}
         </aside>
       )}
@@ -889,22 +888,6 @@ function App(): React.ReactElement {
             <h1>{activeSession?.title ?? 'No session selected'}</h1>
           </div>
           <div className="panel-actions">
-            <div className="workspace-switcher" aria-label="Workspace view">
-              <button
-                type="button"
-                className={workspaceView === 'operator' ? 'active' : ''}
-                onClick={() => setWorkspaceView('operator')}
-              >
-                AI Operator
-              </button>
-              <button
-                type="button"
-                className={workspaceView === 'recon' ? 'active' : ''}
-                onClick={() => setWorkspaceView('recon')}
-              >
-                Recon Board
-              </button>
-            </div>
             {workspaceView === 'recon' && (
               <button type="button" onClick={() => setTerminalCompact((current) => !current)}>
                 {terminalCompact ? 'Comfort view' : 'Dense view'}
