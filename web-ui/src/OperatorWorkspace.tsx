@@ -13,11 +13,9 @@ import type {
   WorkbenchStatus,
 } from './api';
 
-type OperatorPage = 'run' | 'output';
+export type OperatorPage = 'run' | 'output';
 type OutputFilter = 'all' | 'tools' | 'ai';
 type ToolActivity = { id: string; name: string; detail: string; status: string };
-
-const PAGE_KEY = 'agent-workbench:operator-page';
 
 export function OperatorWorkspace({
   engagement,
@@ -32,6 +30,8 @@ export function OperatorWorkspace({
   status,
   analyzing,
   policyBusy,
+  page,
+  onPageChange,
   onProfile,
   onStart,
   onCancel,
@@ -54,6 +54,8 @@ export function OperatorWorkspace({
   status: WorkbenchStatus | null;
   analyzing: boolean;
   policyBusy: boolean;
+  page: OperatorPage;
+  onPageChange: (page: OperatorPage) => void;
   onProfile: (profile: ReconRun['profile']) => void;
   onStart: () => void;
   onCancel: () => void;
@@ -64,7 +66,6 @@ export function OperatorWorkspace({
   onTogglePassive: () => void;
   onToggleSubdomains: () => void;
 }): React.ReactElement {
-  const [page, setPage] = useState<OperatorPage>(initialPage);
   const [outputFilter, setOutputFilter] = useState<OutputFilter>('all');
   const outputRef = useRef<HTMLDivElement>(null);
   const running =
@@ -86,14 +87,6 @@ export function OperatorWorkspace({
   ).length;
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(PAGE_KEY, page);
-    } catch {
-      // The page switcher remains usable without browser storage.
-    }
-  }, [page]);
-
-  useEffect(() => {
     if (page !== 'output') return;
     const node = outputRef.current;
     if (node) node.scrollTop = node.scrollHeight;
@@ -102,55 +95,91 @@ export function OperatorWorkspace({
   return (
     <section className="operator-v2">
       <header className="operator-v2-bar">
-        <div className="operator-v2-scope">
-          <span className="eyebrow">AUTHORIZED SCOPE · v{engagement?.scope.version ?? 0}</span>
-          <strong>{engagement?.scope.allowedHosts.join(', ') ?? 'No scope selected'}</strong>
+        <div className="operator-overview-v3">
+          <OverviewCard
+            icon="◎"
+            label="Target"
+            value={engagement?.scope.allowedHosts[0] ?? 'No target selected'}
+            detail={`${engagement?.scope.allowedHosts.length ?? 0} authorized host rules`}
+          />
+          <OverviewCard
+            icon="⌾"
+            label="Mode"
+            value={engagement?.mode ?? 'Not configured'}
+            detail={running ? 'Execution in progress' : 'Approval policies active'}
+            tone="green"
+          />
+          <OverviewCard
+            icon="✣"
+            label="Provider / Model"
+            value={
+              status?.providers.find((item) => item.provider === session?.provider)?.label ??
+              session?.provider ??
+              'No provider'
+            }
+            detail={session?.model ?? 'No model selected'}
+            tone="cyan"
+          />
+          <OverviewCard
+            icon="♢"
+            label="Scanner health"
+            value={readyScanners > 0 ? 'Healthy' : 'Needs attention'}
+            detail={`${readyScanners} scanners ready`}
+            tone={readyScanners > 0 ? 'green' : 'amber'}
+          />
         </div>
 
-        <nav className="operator-v2-pages" aria-label="AI Operator pages">
-          <button
-            type="button"
-            className={page === 'run' ? 'active' : ''}
-            onClick={() => setPage('run')}
-          >
-            <span>Run</span>
-            <small>{running ? 'live' : `${run?.progress ?? 0}%`}</small>
-          </button>
-          <button
-            type="button"
-            className={page === 'output' ? 'active' : ''}
-            onClick={() => setPage('output')}
-          >
-            <span>Output & Evidence</span>
-            <small>{events.length + artifacts.length}</small>
-          </button>
-        </nav>
+        <div className="operator-commandbar-v3">
+          <div className="operator-v2-scope">
+            <span className="eyebrow">AUTHORIZED SCOPE · v{engagement?.scope.version ?? 0}</span>
+            <strong>{engagement?.scope.allowedHosts.join(', ') ?? 'No scope selected'}</strong>
+          </div>
 
-        <div className="operator-v2-controls">
-          <select
-            aria-label="Finder profile"
-            value={profile}
-            disabled={!session || running}
-            onChange={(event) => onProfile(event.target.value as ReconRun['profile'])}
-          >
-            <option value="quick">Quick</option>
-            <option value="standard">Standard</option>
-            <option value="advanced">Advanced</option>
-          </select>
-          {running ? (
-            <button type="button" className="stop" onClick={onCancel}>
-              Stop
-            </button>
-          ) : (
+          <nav className="operator-v2-pages" aria-label="AI Operator pages">
             <button
               type="button"
-              className="start"
-              onClick={onStart}
-              disabled={!session || engagement?.mode !== 'RECON'}
+              className={page === 'run' ? 'active' : ''}
+              onClick={() => onPageChange('run')}
             >
-              Start finder
+              <span>Run Control</span>
+              <small>{running ? 'live' : `${run?.progress ?? 0}%`}</small>
             </button>
-          )}
+            <button
+              type="button"
+              className={page === 'output' ? 'active' : ''}
+              onClick={() => onPageChange('output')}
+            >
+              <span>Output & Evidence</span>
+              <small>{events.length + artifacts.length}</small>
+            </button>
+          </nav>
+
+          <div className="operator-v2-controls">
+            <select
+              aria-label="Finder profile"
+              value={profile}
+              disabled={!session || running}
+              onChange={(event) => onProfile(event.target.value as ReconRun['profile'])}
+            >
+              <option value="quick">Quick</option>
+              <option value="standard">Standard</option>
+              <option value="advanced">Advanced</option>
+            </select>
+            {running ? (
+              <button type="button" className="stop" onClick={onCancel}>
+                Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="start"
+                onClick={onStart}
+                disabled={!session || engagement?.mode !== 'RECON'}
+              >
+                Start finder
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -178,7 +207,7 @@ export function OperatorWorkspace({
           onLoadSkill={onLoadSkill}
           onTogglePassive={onTogglePassive}
           onToggleSubdomains={onToggleSubdomains}
-          onOpenOutput={() => setPage('output')}
+          onOpenOutput={() => onPageChange('output')}
         />
       ) : (
         <OutputPage
@@ -191,9 +220,39 @@ export function OperatorWorkspace({
           findings={findings}
           coverage={coverage}
           status={status}
+          pending={pending}
+          onApprove={onApprove}
+          onReject={onReject}
         />
       )}
     </section>
+  );
+}
+
+function OverviewCard({
+  icon,
+  label,
+  value,
+  detail,
+  tone = 'neutral',
+}: {
+  icon: string;
+  label: string;
+  value: string;
+  detail: string;
+  tone?: 'neutral' | 'green' | 'cyan' | 'amber';
+}): React.ReactElement {
+  return (
+    <article className={`overview-card-v3 ${tone}`}>
+      <span className="overview-icon-v3" aria-hidden="true">
+        {icon}
+      </span>
+      <div>
+        <small>{label}</small>
+        <strong>{value}</strong>
+        <span>{detail}</span>
+      </div>
+    </article>
   );
 }
 
@@ -422,6 +481,9 @@ function OutputPage({
   findings,
   coverage,
   status,
+  pending,
+  onApprove,
+  onReject,
 }: {
   events: RuntimeEvent[];
   outputFilter: OutputFilter;
@@ -432,26 +494,41 @@ function OutputPage({
   findings: Finding[];
   coverage: CoverageResponse;
   status: WorkbenchStatus | null;
+  pending: ActionProposal[];
+  onApprove: (proposal: ActionProposal) => void;
+  onReject: (proposal: ActionProposal) => void;
 }): React.ReactElement {
+  const coverageTotal = coverage.summary.total ?? 0;
+  const coverageDone = Math.max(0, coverageTotal - (coverage.summary.untested ?? 0));
+  const coveragePercent = coverageTotal > 0 ? Math.round((coverageDone / coverageTotal) * 100) : 0;
+  const severityCounts = findings.reduce<Record<string, number>>((counts, finding) => {
+    counts[finding.severity] = (counts[finding.severity] ?? 0) + 1;
+    return counts;
+  }, {});
   return (
     <div className="output-page-v2">
       <section className="output-console-v2">
         <header>
           <div>
-            <span className="eyebrow">LIVE STREAM</span>
-            <h2>Output</h2>
+            <span className="eyebrow">SESSION TRANSCRIPT</span>
+            <h2>Live operation stream</h2>
           </div>
-          <div className="output-filters-v2">
-            {(['all', 'tools', 'ai'] as const).map((filter) => (
-              <button
-                type="button"
-                className={outputFilter === filter ? 'active' : ''}
-                onClick={() => setOutputFilter(filter)}
-                key={filter}
-              >
-                {filter}
-              </button>
-            ))}
+          <div className="output-console-actions-v3">
+            <span className="streaming-indicator-v3">
+              <i /> Streaming
+            </span>
+            <div className="output-filters-v2">
+              {(['all', 'tools', 'ai'] as const).map((filter) => (
+                <button
+                  type="button"
+                  className={outputFilter === filter ? 'active' : ''}
+                  onClick={() => setOutputFilter(filter)}
+                  key={filter}
+                >
+                  {filter}
+                </button>
+              ))}
+            </div>
           </div>
         </header>
         <div className="output-stream-v2" ref={outputRef} role="log" aria-live="polite">
@@ -471,11 +548,30 @@ function OutputPage({
       <aside className="evidence-panel-v2">
         <header>
           <div>
-            <span className="eyebrow">DETAILS</span>
-            <h2>Evidence</h2>
+            <span className="eyebrow">MISSION DETAILS</span>
+            <h2>Evidence & control</h2>
           </div>
           <strong>{artifacts.length}</strong>
         </header>
+        {pending[0] && (
+          <section className="output-approval-v3">
+            <header>
+              <strong>Approval required</strong>
+              <span>1 pending</span>
+            </header>
+            <h3>{pending[0].action}</h3>
+            <p>{pending[0].reason}</p>
+            <small>Risk: {pending[0].risk} · one-time authorization</small>
+            <div>
+              <button type="button" className="approve" onClick={() => onApprove(pending[0])}>
+                ✓ Approve
+              </button>
+              <button type="button" className="decline" onClick={() => onReject(pending[0])}>
+                × Deny
+              </button>
+            </div>
+          </section>
+        )}
         <details open>
           <summary>
             Tool activity <span>{activity.length}</span>
@@ -518,6 +614,23 @@ function OutputPage({
           <summary>
             Findings <span>{findings.length}</span>
           </summary>
+          {findings.length > 0 && (
+            <div className="finding-bars-v3">
+              {(['critical', 'high', 'medium', 'low'] as const).map((severity) => (
+                <div key={severity}>
+                  <span>{severity}</span>
+                  <i>
+                    <b
+                      style={{
+                        width: `${Math.min(100, ((severityCounts[severity] ?? 0) / findings.length) * 100)}%`,
+                      }}
+                    />
+                  </i>
+                  <strong>{severityCounts[severity] ?? 0}</strong>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="detail-list-v2 findings">
             {findings.slice(0, 8).map((finding) => (
               <article key={finding.id}>
@@ -533,10 +646,18 @@ function OutputPage({
             {findings.length === 0 && <Empty text="No scanner signals." />}
           </div>
         </details>
-        <details>
+        <details open>
           <summary>
-            Coverage & scanners <span>{coverage.summary.total ?? 0}</span>
+            Coverage <span>{coveragePercent}%</span>
           </summary>
+          <div className="coverage-progress-v3">
+            <i>
+              <b style={{ width: `${coveragePercent}%` }} />
+            </i>
+            <span>
+              {coverageDone} of {coverageTotal} checks exercised
+            </span>
+          </div>
           <div className="coverage-v2">
             {['untested', 'tried', 'passed', 'failed', 'skipped'].map((key) => (
               <span key={key}>
@@ -554,6 +675,13 @@ function OutputPage({
             ))}
           </div>
         </details>
+        <section className="audit-card-v3">
+          <div>
+            <span className="eyebrow">AUDIT</span>
+            <strong>All actions recorded</strong>
+          </div>
+          <span>{events.length} events</span>
+        </section>
       </aside>
     </div>
   );
@@ -587,14 +715,6 @@ function Recommendation({
 
 function Empty({ text }: { text: string }): React.ReactElement {
   return <div className="empty-v2">{text}</div>;
-}
-
-function initialPage(): OperatorPage {
-  try {
-    return window.localStorage.getItem(PAGE_KEY) === 'output' ? 'output' : 'run';
-  } catch {
-    return 'run';
-  }
 }
 
 function currentOperation(

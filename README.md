@@ -229,6 +229,11 @@ from tool activity, artifacts, findings, coverage, and scanner health. The
 Recon inspector and legacy JSON importer remain available on Recon Board without
 occupying AI Operator workspace space.
 
+The command-center UI uses a compact navigation rail, live Target/Mode/Provider/
+Scanner Health cards, a terminal-style session transcript, and an evidence rail.
+Provider and model selection live in a focused header menu so configuration stays
+available without crowding the active operation.
+
 `Analyze evidence with AI` sends the selected provider a bounded evidence
 envelope containing the current scope, run summary, recent typed-tool output,
 artifact hashes, findings, coverage, and scanner status. Target and scanner

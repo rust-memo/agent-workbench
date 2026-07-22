@@ -7,7 +7,7 @@ import React, {
   useState,
 } from 'react';
 import { createRoot } from 'react-dom/client';
-import { OperatorWorkspace } from './OperatorWorkspace';
+import { type OperatorPage, OperatorWorkspace } from './OperatorWorkspace';
 import {
   type ActionProposal,
   type Artifact,
@@ -30,6 +30,7 @@ import './styles.css';
 
 const SIDEBAR_COLLAPSED_KEY = 'agent-workbench:sessions-sidebar-collapsed';
 const WORKSPACE_VIEW_KEY = 'agent-workbench:workspace-view';
+const OPERATOR_PAGE_KEY = 'agent-workbench:operator-page';
 type WorkspaceView = 'operator' | 'recon';
 
 function initialSidebarCollapsed(): boolean {
@@ -45,6 +46,14 @@ function initialWorkspaceView(): WorkspaceView {
     return window.localStorage.getItem(WORKSPACE_VIEW_KEY) === 'recon' ? 'recon' : 'operator';
   } catch {
     return 'operator';
+  }
+}
+
+function initialOperatorPage(): OperatorPage {
+  try {
+    return window.localStorage.getItem(OPERATOR_PAGE_KEY) === 'output' ? 'output' : 'run';
+  } catch {
+    return 'run';
   }
 }
 
@@ -78,6 +87,7 @@ function App(): React.ReactElement {
   const [inspectorWidth, setInspectorWidth] = useState(330);
   const [terminalCompact, setTerminalCompact] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(initialWorkspaceView);
+  const [operatorPage, setOperatorPage] = useState<OperatorPage>(initialOperatorPage);
   const lastSeq = useRef(0);
 
   useEffect(() => {
@@ -95,6 +105,14 @@ function App(): React.ReactElement {
       // The view switcher remains usable without persistent browser storage.
     }
   }, [workspaceView]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(OPERATOR_PAGE_KEY, operatorPage);
+    } catch {
+      // Navigation remains usable without persistent browser storage.
+    }
+  }, [operatorPage]);
 
   const refreshSessionData = useCallback(async (sessionId: string) => {
     const [files, actions, nextFindings, nextCoverage, runs] = await Promise.all([
@@ -638,88 +656,127 @@ function App(): React.ReactElement {
             <small>Local AI Security Workbench · v0.5.0</small>
           </div>
         </div>
-        {sidebarCollapsed && (
+        <div className="topbar-actions-v3">
+          <StatusPill label="Local only" tone="good" />
+          <details className="provider-menu-v3">
+            <summary>
+              <span>
+                <small>Provider</small>
+                <strong>{activeCapability?.label ?? 'Configure provider'}</strong>
+              </span>
+              <i>⌄</i>
+            </summary>
+            <div className="provider-switcher">
+              <label>
+                <span>Provider</span>
+                <select
+                  value={providerDraft}
+                  onChange={(event) => {
+                    const provider = event.target.value as Session['provider'];
+                    setProviderDraft(provider);
+                    const capability = status?.providers.find((item) => item.provider === provider);
+                    setModelDraft(capability?.models[0] ?? 'default');
+                  }}
+                  disabled={!activeSession || activeSession.state === 'running'}
+                >
+                  {status?.providers.map((provider) => (
+                    <option key={provider.provider} value={provider.provider}>
+                      {provider.ready ? '✓' : '×'} {provider.label} · {provider.models.length}{' '}
+                      models
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Model</span>
+                <select
+                  className="model-select"
+                  value={modelDraft}
+                  onChange={(event) => setModelDraft(event.target.value)}
+                  disabled={!activeSession || activeSession.state === 'running'}
+                >
+                  {modelDraft && !draftCapability?.models.includes(modelDraft) && (
+                    <option value={modelDraft}>{modelDraft}</option>
+                  )}
+                  {draftCapability?.models.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="provider-menu-actions-v3">
+                <button
+                  type="button"
+                  onClick={() => void switchProvider()}
+                  disabled={
+                    !activeSession || activeSession.state === 'running' || !modelDraft.trim()
+                  }
+                >
+                  Apply selection
+                </button>
+                <button
+                  type="button"
+                  className="check-button"
+                  onClick={() => void checkProviders()}
+                  disabled={checkingProviders}
+                >
+                  {checkingProviders ? 'Checking…' : 'Check models'}
+                </button>
+              </div>
+              <small className={draftCapability?.ready ? 'provider-ready' : 'provider-unavailable'}>
+                {draftCapability?.ready
+                  ? `CLI ready · ${draftCapability.models.length} models discovered`
+                  : (draftCapability?.error ?? 'Unavailable')}
+              </small>
+            </div>
+          </details>
           <button
             type="button"
-            className="sidebar-reveal"
-            aria-label="Show sessions panel"
-            aria-expanded="false"
-            onClick={() => setSidebarCollapsed(false)}
+            className="topbar-menu-v3"
+            aria-label={sidebarCollapsed ? 'Show navigation' : 'Hide navigation'}
+            onClick={() => setSidebarCollapsed((current) => !current)}
           >
-            ☰ Sessions
+            ☰
           </button>
-        )}
-        <div className="provider-switcher">
-          <label>
-            <span>Provider</span>
-            <select
-              value={providerDraft}
-              onChange={(event) => {
-                const provider = event.target.value as Session['provider'];
-                setProviderDraft(provider);
-                const capability = status?.providers.find((item) => item.provider === provider);
-                setModelDraft(capability?.models[0] ?? 'default');
-              }}
-              disabled={!activeSession || activeSession.state === 'running'}
-            >
-              {status?.providers.map((provider) => (
-                <option key={provider.provider} value={provider.provider}>
-                  {provider.ready ? '✓' : '×'} {provider.label} · {provider.models.length} models
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span>Model</span>
-            <select
-              className="model-select"
-              value={modelDraft}
-              onChange={(event) => setModelDraft(event.target.value)}
-              disabled={!activeSession || activeSession.state === 'running'}
-            >
-              {modelDraft && !draftCapability?.models.includes(modelDraft) && (
-                <option value={modelDraft}>{modelDraft}</option>
-              )}
-              {draftCapability?.models.map((model) => (
-                <option key={model} value={model}>
-                  {model}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            onClick={() => void switchProvider()}
-            disabled={!activeSession || activeSession.state === 'running' || !modelDraft.trim()}
-          >
-            Apply
-          </button>
-          <button
-            type="button"
-            className="check-button"
-            onClick={() => void checkProviders()}
-            disabled={checkingProviders}
-          >
-            {checkingProviders ? 'Checking…' : 'Check models'}
-          </button>
-          <small className={draftCapability?.ready ? 'provider-ready' : 'provider-unavailable'}>
-            {draftCapability?.ready
-              ? `CLI ready · ${draftCapability.models.length} models discovered`
-              : (draftCapability?.error ?? 'Unavailable')}
-          </small>
-        </div>
-        <div className="top-status">
-          <StatusPill label="Loopback" tone="good" />
-          <StatusPill
-            label={activeCapability?.label ?? 'Provider'}
-            tone={activeCapability?.ready ? 'good' : 'warn'}
-          />
-          <StatusPill label={activeEngagement?.mode ?? 'NO MODE'} tone="neutral" />
         </div>
       </header>
 
       {!sidebarCollapsed && (
         <aside className="sidebar">
+          <nav className="primary-nav-v3" aria-label="Workbench navigation">
+            <button
+              type="button"
+              className={workspaceView === 'operator' && operatorPage === 'run' ? 'active' : ''}
+              onClick={() => {
+                setWorkspaceView('operator');
+                setOperatorPage('run');
+              }}
+            >
+              <i>◉</i>
+              <span>Engagement</span>
+              <b>›</b>
+            </button>
+            <button
+              type="button"
+              className={workspaceView === 'operator' && operatorPage === 'output' ? 'active' : ''}
+              onClick={() => {
+                setWorkspaceView('operator');
+                setOperatorPage('output');
+              }}
+            >
+              <i>⌁</i>
+              <span>Output & Evidence</span>
+            </button>
+            <button
+              type="button"
+              className={workspaceView === 'recon' ? 'active' : ''}
+              onClick={() => setWorkspaceView('recon')}
+            >
+              <i>⌗</i>
+              <span>Recon Board</span>
+            </button>
+          </nav>
           <div className="section-title">
             <span>Sessions</span>
             <span className="section-actions">
@@ -888,6 +945,8 @@ function App(): React.ReactElement {
             coverage={coverage}
             status={status}
             analyzing={analyzingEvidence}
+            page={operatorPage}
+            onPageChange={setOperatorPage}
             onProfile={setReconProfile}
             onStart={() => void startRecon()}
             onCancel={() => void cancelTurn()}
