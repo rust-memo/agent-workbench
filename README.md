@@ -222,9 +222,13 @@ are read-only, non-root, capability-free, `no-new-privileges`, resource-limited,
 and receive no host mounts, Docker socket, home directory, or AI credentials.
 
 Use the workspace switcher to move between the traditional **Recon Board** and
-the **AI Operator** cockpit. AI Operator shows the current tool, execution
-queue, live event/output stream, scanner health, saved evidence count, AI
-analysis, ranked recommendations, findings, and permission gates in one view.
+the calm, full-width **AI Operator** workspace. Its **Run** page keeps the active
+operation, pipeline progress, next steps, AI brief, and permission gate focused
+in one uncluttered view. **Output & Evidence** separates the live event stream
+from tool activity, artifacts, findings, coverage, and scanner health. The
+Recon inspector and legacy JSON importer remain available on Recon Board without
+occupying AI Operator workspace space.
+
 `Analyze evidence with AI` sends the selected provider a bounded evidence
 envelope containing the current scope, run summary, recent typed-tool output,
 artifact hashes, findings, coverage, and scanner status. Target and scanner

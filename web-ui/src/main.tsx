@@ -620,12 +620,13 @@ function App(): React.ReactElement {
 
   return (
     <div
-      className={`shell ${terminalCompact ? 'terminal-compact' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
+      className={`shell ${terminalCompact ? 'terminal-compact' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''} ${workspaceView === 'operator' ? 'operator-focus' : ''}`}
       style={
         {
           '--sidebar-width': sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
           '--left-splitter-width': sidebarCollapsed ? '0px' : '6px',
-          '--inspector-width': `${inspectorWidth}px`,
+          '--right-splitter-width': workspaceView === 'operator' ? '0px' : '6px',
+          '--inspector-width': workspaceView === 'operator' ? '0px' : `${inspectorWidth}px`,
         } as CSSProperties
       }
     >
@@ -779,28 +780,34 @@ function App(): React.ReactElement {
               <p>Discovery may be recorded outside scope. Active actions stay restricted.</p>
             </div>
           )}
-          <div className="section-title inspector-gap">
-            <span>Legacy JSON</span>
-            <span className="count">{legacySessions.filter((item) => !item.imported).length}</span>
-          </div>
-          <div className="legacy-list">
-            {legacySessions.slice(0, 5).map((legacy) => (
-              <article className="legacy-card" key={legacy.id}>
-                <strong>{legacy.fileName}</strong>
-                <small>{legacy.preview}</small>
-                {legacy.imported ? (
-                  <span>Imported</span>
-                ) : (
-                  <button type="button" onClick={() => void importLegacy(legacy)}>
-                    Import once
-                  </button>
+          {workspaceView === 'recon' && (
+            <>
+              <div className="section-title inspector-gap">
+                <span>Legacy JSON</span>
+                <span className="count">
+                  {legacySessions.filter((item) => !item.imported).length}
+                </span>
+              </div>
+              <div className="legacy-list">
+                {legacySessions.slice(0, 5).map((legacy) => (
+                  <article className="legacy-card" key={legacy.id}>
+                    <strong>{legacy.fileName}</strong>
+                    <small>{legacy.preview}</small>
+                    {legacy.imported ? (
+                      <span>Imported</span>
+                    ) : (
+                      <button type="button" onClick={() => void importLegacy(legacy)}>
+                        Import once
+                      </button>
+                    )}
+                  </article>
+                ))}
+                {legacySessions.length === 0 && (
+                  <div className="empty compact">No CLI JSON sessions.</div>
                 )}
-              </article>
-            ))}
-            {legacySessions.length === 0 && (
-              <div className="empty compact">No CLI JSON sessions.</div>
-            )}
-          </div>
+              </div>
+            </>
+          )}
         </aside>
       )}
 
@@ -878,6 +885,7 @@ function App(): React.ReactElement {
             artifacts={artifacts}
             proposals={proposals}
             findings={findings}
+            coverage={coverage}
             status={status}
             analyzing={analyzingEvidence}
             onProfile={setReconProfile}
@@ -1004,140 +1012,144 @@ function App(): React.ReactElement {
         </div>
       </main>
 
-      <div
-        className="splitter splitter-right"
-        role="separator"
-        tabIndex={0}
-        aria-label="Resize inspector panel"
-        onPointerDown={(event) => startResize('right', event)}
-      />
+      {workspaceView === 'recon' && (
+        <>
+          <div
+            className="splitter splitter-right"
+            role="separator"
+            tabIndex={0}
+            aria-label="Resize inspector panel"
+            onPointerDown={(event) => startResize('right', event)}
+          />
 
-      <aside className="inspector">
-        <div className="section-title">
-          <span>Approvals</span>
-          <span className="count">
-            {proposals.filter((item) => item.status === 'pending').length}
-          </span>
-        </div>
-        <div className="approval-list">
-          {proposals.slice(0, 6).map((proposal) => (
-            <article className={`approval-card ${proposal.risk}`} key={proposal.id}>
-              <div>
-                <strong>{proposal.action}</strong>
-                <span>
-                  {proposal.risk} · {proposal.status}
-                </span>
-              </div>
-              <p>{proposal.reason}</p>
-              <code>{proposal.approvalHash.slice(0, 14)}…</code>
-              {proposal.status === 'pending' && (
-                <div className="approval-actions">
-                  <button type="button" onClick={() => void approveAction(proposal)}>
-                    Review & approve once
-                  </button>
-                  <button
-                    type="button"
-                    className="reject"
-                    onClick={() => void rejectAction(proposal)}
+          <aside className="inspector">
+            <div className="section-title">
+              <span>Approvals</span>
+              <span className="count">
+                {proposals.filter((item) => item.status === 'pending').length}
+              </span>
+            </div>
+            <div className="approval-list">
+              {proposals.slice(0, 6).map((proposal) => (
+                <article className={`approval-card ${proposal.risk}`} key={proposal.id}>
+                  <div>
+                    <strong>{proposal.action}</strong>
+                    <span>
+                      {proposal.risk} · {proposal.status}
+                    </span>
+                  </div>
+                  <p>{proposal.reason}</p>
+                  <code>{proposal.approvalHash.slice(0, 14)}…</code>
+                  {proposal.status === 'pending' && (
+                    <div className="approval-actions">
+                      <button type="button" onClick={() => void approveAction(proposal)}>
+                        Review & approve once
+                      </button>
+                      <button
+                        type="button"
+                        className="reject"
+                        onClick={() => void rejectAction(proposal)}
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  )}
+                  {proposal.error && <small>{proposal.error}</small>}
+                </article>
+              ))}
+              {proposals.length === 0 && (
+                <div className="empty compact">Scanner and validation proposals appear here.</div>
+              )}
+            </div>
+            <div className="section-title inspector-gap">
+              <span>Findings</span>
+              <span className="count">{findings.length}</span>
+            </div>
+            <div className="finding-list">
+              {findings.slice(0, 8).map((finding) => (
+                <article className="finding-card" key={finding.id}>
+                  <div>
+                    <span className={`severity ${finding.severity}`}>{finding.severity}</span>
+                    <strong>{finding.title}</strong>
+                  </div>
+                  <code>{finding.scannerReference}</code>
+                  <small>{finding.url}</small>
+                  {finding.status === 'needs_validation' && (
+                    <button
+                      type="button"
+                      className="validate-button"
+                      onClick={() => void proposeValidation(finding)}
+                    >
+                      Propose bounded validation
+                    </button>
+                  )}
+                  <select
+                    aria-label={`Status for ${finding.title}`}
+                    value={finding.status}
+                    onChange={(event) =>
+                      void updateFinding(finding, event.target.value as Finding['status'])
+                    }
                   >
-                    Decline
-                  </button>
-                </div>
+                    <option value="needs_validation">Needs validation</option>
+                    <option value="confirmed">Confirmed manually</option>
+                    <option value="false_positive">False positive</option>
+                    <option value="informational">Informational</option>
+                  </select>
+                </article>
+              ))}
+              {findings.length === 0 && (
+                <div className="empty compact">Scanner hits stay unconfirmed until validation.</div>
               )}
-              {proposal.error && <small>{proposal.error}</small>}
-            </article>
-          ))}
-          {proposals.length === 0 && (
-            <div className="empty compact">Scanner and validation proposals appear here.</div>
-          )}
-        </div>
-        <div className="section-title inspector-gap">
-          <span>Findings</span>
-          <span className="count">{findings.length}</span>
-        </div>
-        <div className="finding-list">
-          {findings.slice(0, 8).map((finding) => (
-            <article className="finding-card" key={finding.id}>
-              <div>
-                <span className={`severity ${finding.severity}`}>{finding.severity}</span>
-                <strong>{finding.title}</strong>
-              </div>
-              <code>{finding.scannerReference}</code>
-              <small>{finding.url}</small>
-              {finding.status === 'needs_validation' && (
-                <button
-                  type="button"
-                  className="validate-button"
-                  onClick={() => void proposeValidation(finding)}
+            </div>
+            <div className="section-title inspector-gap">
+              <span>Coverage</span>
+              <span className="count">{coverage.summary.total ?? 0}</span>
+            </div>
+            <div className="coverage-summary">
+              {['untested', 'tried', 'passed', 'failed', 'skipped'].map((key) => (
+                <span key={key}>
+                  <strong>{coverage.summary[key] ?? 0}</strong>
+                  {key}
+                </span>
+              ))}
+            </div>
+            <div className="section-title">
+              <span>Artifacts</span>
+              <span className="count">{artifacts.length}</span>
+            </div>
+            <div className="artifact-list">
+              {artifacts.map((artifact) => (
+                <ArtifactCard key={artifact.id} artifact={artifact} />
+              ))}
+              {artifacts.length === 0 && (
+                <div className="empty">Saved evidence will appear here with SHA-256 metadata.</div>
+              )}
+            </div>
+            <div className="section-title inspector-gap">
+              <span>Scanner profiles</span>
+              <span className="count">{Object.keys(status?.scanners ?? {}).length}</span>
+            </div>
+            <div className="scanner-grid">
+              {Object.entries(status?.scanners ?? {}).map(([name, scanner]) => (
+                <span
+                  key={name}
+                  className={scanner.available ? 'ready' : 'offline'}
+                  title={scanner.detail}
                 >
-                  Propose bounded validation
-                </button>
-              )}
-              <select
-                aria-label={`Status for ${finding.title}`}
-                value={finding.status}
-                onChange={(event) =>
-                  void updateFinding(finding, event.target.value as Finding['status'])
-                }
-              >
-                <option value="needs_validation">Needs validation</option>
-                <option value="confirmed">Confirmed manually</option>
-                <option value="false_positive">False positive</option>
-                <option value="informational">Informational</option>
-              </select>
-            </article>
-          ))}
-          {findings.length === 0 && (
-            <div className="empty compact">Scanner hits stay unconfirmed until validation.</div>
-          )}
-        </div>
-        <div className="section-title inspector-gap">
-          <span>Coverage</span>
-          <span className="count">{coverage.summary.total ?? 0}</span>
-        </div>
-        <div className="coverage-summary">
-          {['untested', 'tried', 'passed', 'failed', 'skipped'].map((key) => (
-            <span key={key}>
-              <strong>{coverage.summary[key] ?? 0}</strong>
-              {key}
-            </span>
-          ))}
-        </div>
-        <div className="section-title">
-          <span>Artifacts</span>
-          <span className="count">{artifacts.length}</span>
-        </div>
-        <div className="artifact-list">
-          {artifacts.map((artifact) => (
-            <ArtifactCard key={artifact.id} artifact={artifact} />
-          ))}
-          {artifacts.length === 0 && (
-            <div className="empty">Saved evidence will appear here with SHA-256 metadata.</div>
-          )}
-        </div>
-        <div className="section-title inspector-gap">
-          <span>Scanner profiles</span>
-          <span className="count">{Object.keys(status?.scanners ?? {}).length}</span>
-        </div>
-        <div className="scanner-grid">
-          {Object.entries(status?.scanners ?? {}).map(([name, scanner]) => (
-            <span
-              key={name}
-              className={scanner.available ? 'ready' : 'offline'}
-              title={scanner.detail}
-            >
-              <i /> {name} <small>{scanner.profile}</small>
-            </span>
-          ))}
-        </div>
-        <div className="security-note">
-          <span>SECURITY BOUNDARY</span>
-          <p>
-            Docker scanners use fixed images and arguments, no host mounts or credentials, and
-            best-effort network scope enforcement.
-          </p>
-        </div>
-      </aside>
+                  <i /> {name} <small>{scanner.profile}</small>
+                </span>
+              ))}
+            </div>
+            <div className="security-note">
+              <span>SECURITY BOUNDARY</span>
+              <p>
+                Docker scanners use fixed images and arguments, no host mounts or credentials, and
+                best-effort network scope enforcement.
+              </p>
+            </div>
+          </aside>
+        </>
+      )}
       {error && (
         <button type="button" className="toast" onClick={() => setError('')}>
           {error}
