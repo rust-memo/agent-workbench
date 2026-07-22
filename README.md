@@ -112,7 +112,7 @@ irm https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.ps1
 Pin a release or choose an install directory:
 
 ```sh
-PENTESTERFLOW_VERSION=v0.3.2 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
+PENTESTERFLOW_VERSION=v0.4.0 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh)"
 ```
 
@@ -153,7 +153,7 @@ pentesterflow --resume <session-id>
 On resume, PentesterFlow automatically shows a recap of the previous session's
 persistent memory so you can continue without manually reconstructing context.
 
-## Local Web Workbench (v0.3.2)
+## Local Web Workbench (v0.4.0)
 
 The Web workbench keeps the existing CLI intact and adds an English-only,
 terminal-style local interface. Web sessions use SQLite as their only source of
@@ -169,7 +169,7 @@ Requirements for the Web server:
 ```sh
 npm install
 npm run build
-npm run scanner:build
+npm run scanner:build:all
 npm run start:web
 ```
 
@@ -183,18 +183,20 @@ Open the single-use pairing URL printed in the terminal. The fragment is
 exchanged for an HttpOnly, SameSite=Strict session cookie and is removed from
 the browser address bar immediately.
 
-v0.3.2 includes general assistance, Plan and low-impact Recon modes, an
+v0.4.0 includes general assistance, Plan and low-impact Recon modes, an
 Ollama/Qwen Code/Codex CLI/Claude CLI/OpenCode/OpenClaude provider and checked-model switcher,
-Subfinder, DNSX, HTTPX, Katana, Nuclei, SQLite event replay, cancellation,
-hash-addressed artifacts, approval proposals, Findings, and Coverage. All five
-scanners run in an ephemeral `agent-workbench-scanner-safe:0.3.2` container.
+Subfinder, DNSX, HTTPX, Katana, Nuclei, FFUF, Nmap connect scanning, an opt-in
+raw-socket Nmap profile, SQLite event replay, cancellation,
+hash-addressed artifacts, approval proposals, Findings, and Coverage. The
+safe scanners run in an ephemeral `agent-workbench-scanner-safe:0.4.0` container.
 The server owns the image, entrypoint, flags, network mode, resource limits,
-user, and capabilities; targets are sent through stdin. Scanner containers are
-read-only, non-root, capability-free, `no-new-privileges`, resource-limited,
+user, and capabilities; targets are sent through stdin. Safe scanner containers
+are read-only, non-root, capability-free, `no-new-privileges`, resource-limited,
 and receive no host mounts, Docker socket, home directory, or AI credentials.
 
 DNSX and HTTPX are low-impact Recon actions when direct recon is enabled.
-Katana and Nuclei create an operator-visible proposal instead of executing in
+Katana, Nuclei, FFUF, Nmap, and bounded finding validation create an
+operator-visible proposal instead of executing in
 the model turn. Approval uses canonical JSON plus the action, mode, and scope
 version; it expires after ten minutes and is consumed exactly once. Editing any
 argument or changing scope invalidates it. Cancellation removes the exact
@@ -207,6 +209,20 @@ template paths, unsigned arbitrary templates, and high-impact tags are not
 available through the Web action. Scanner matches are stored as
 `needs_validation` (or informational), never as confirmed findings. Manual
 confirmation is explicit and audited.
+
+Nmap connect scanning uses the non-raw safe image. SYN scanning is isolated in
+`agent-workbench-scanner-raw:0.4.0`, disabled by default, never uses
+`--privileged`, and receives only `NET_RAW` after starting the server with
+`PENTESTERFLOW_ENABLE_RAW_SCANNER=1`. FFUF uses the server-owned bounded
+wordlist, request limits, and fixed argument builder; the model cannot choose a
+wordlist path or command.
+
+The Web workbench can list and import CLI JSON sessions from the fixed
+`~/.pentesterflow/sessions` directory. Import is one-way, hash-tracked, and
+never modifies the source JSON. Sessions can be exported as redacted JSON and
+deleted only after exact-title confirmation. Finding validation supports
+bounded GET or HEAD reproduction, saves the response as evidence, and still
+requires a separate manual confirmation before a finding becomes confirmed.
 
 Scope enforcement is fail-closed for action inputs and best-effort at the
 network layer; it is not claimed to be complete egress isolation. Out-of-scope
@@ -254,6 +270,8 @@ server-owned paths only at startup with `PENTESTERFLOW_QWEN_PATH`,
 New sessions inherit the provider and model currently selected in the top bar.
 The compact terminal now has a dedicated operation progress dock that shows
 queued, redacted, running, saving, completed, cancelled, and error states.
+Both side panels are drag-resizable, terminal density can be switched live,
+and scanner/profile health is visible in the inspector.
 
 Web data is stored under `.pentesterflow/web/` and is intentionally ignored by
 Git. Raw artifacts are kept until manually deleted. Preview is redacted by

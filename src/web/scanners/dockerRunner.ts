@@ -3,14 +3,26 @@ import { execa } from 'execa';
 import type { ScannerLimits } from '../types.js';
 import { clean } from './output.js';
 
-export const SAFE_SCANNER_IMAGE = 'agent-workbench-scanner-safe:0.3.2';
+export const SAFE_SCANNER_IMAGE = 'agent-workbench-scanner-safe:0.4.0';
+export const RAW_SCANNER_IMAGE = 'agent-workbench-scanner-raw:0.4.0';
 
-export type ScannerName = 'subfinder' | 'dnsx' | 'httpx' | 'katana' | 'nuclei';
+export type ScannerName =
+  | 'subfinder'
+  | 'dnsx'
+  | 'httpx'
+  | 'katana'
+  | 'nuclei'
+  | 'ffuf'
+  | 'nmap_connect'
+  | 'nmap_raw'
+  | 'validate_http';
 
 export interface ScannerResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  profile: 'safe' | 'raw';
+  image: string;
 }
 
 export interface ScannerHealth {
@@ -18,6 +30,8 @@ export interface ScannerHealth {
   detail: string;
   isolation: 'docker';
   image: string;
+  profile: 'safe' | 'raw';
+  enabled: boolean;
 }
 
 /**
@@ -29,7 +43,13 @@ export class DockerScannerRunner {
   constructor(
     private readonly image = SAFE_SCANNER_IMAGE,
     private readonly dockerBinary = 'docker',
+    private readonly rawImage = RAW_SCANNER_IMAGE,
+    private readonly rawEnabled = process.env.PENTESTERFLOW_ENABLE_RAW_SCANNER === '1',
   ) {}
+
+  rawProfileAvailable(): boolean {
+    return this.rawEnabled;
+  }
 
   async subfinder(
     domain: string,
@@ -188,28 +208,171 @@ export class DockerScannerRunner {
     );
   }
 
+  async ffuf(
+    target: string,
+    options: { matchCodes: number[] },
+    limits: ScannerLimits,
+    signal: AbortSignal,
+  ): Promise<ScannerResult> {
+    const fuzzTarget = `${target.replace(/\/+$/, '')}/FUZZ`;
+    return this.run(
+      'ffuf',
+      [
+        '-s',
+        '-noninteractive',
+        '-json',
+        '-w',
+        '/opt/wordlists/common.txt',
+        '-u',
+        fuzzTarget,
+        '-mc',
+        options.matchCodes.join(','),
+        '-rate',
+        String(limits.requestsPerSecond),
+        '-t',
+        String(limits.concurrency),
+        '-timeout',
+        '10',
+        '-maxtime',
+        String(limits.maxRuntimeSeconds),
+      ],
+      undefined,
+      limits,
+      signal,
+    );
+  }
+
+  async nmap(
+    targets: string[],
+    options: { ports: number[]; raw: boolean },
+    limits: ScannerLimits,
+    signal: AbortSignal,
+  ): Promise<ScannerResult> {
+    if (options.raw && !this.rawEnabled)
+      throw new Error(
+        'raw-socket scanner profile is disabled; set PENTESTERFLOW_ENABLE_RAW_SCANNER=1 at server startup',
+      );
+    const scanner = options.raw ? 'nmap_raw' : 'nmap_connect';
+    return this.run(
+      scanner,
+      [
+        options.raw ? '-sS' : '-sT',
+        '-Pn',
+        '-n',
+        '--open',
+        '--reason',
+        '--max-retries',
+        '1',
+        '--max-rate',
+        String(Math.max(1, limits.requestsPerSecond)),
+        '--host-timeout',
+        `${limits.maxRuntimeSeconds}s`,
+        '-p',
+        options.ports.join(','),
+        '-oX',
+        '-',
+        '-iL',
+        '-',
+      ],
+      lines(targets),
+      limits,
+      signal,
+    );
+  }
+
+  async validateHttp(
+    target: string,
+    options: { method: 'GET' | 'HEAD' },
+    limits: ScannerLimits,
+    signal: AbortSignal,
+  ): Promise<ScannerResult> {
+    return this.run(
+      'validate_http',
+      [
+        '--silent',
+        '--show-error',
+        '--include',
+        '--request',
+        options.method,
+        '--proto',
+        '=http,https',
+        '--proto-redir',
+        '=http,https',
+        '--max-redirs',
+        '0',
+        '--connect-timeout',
+        '5',
+        '--max-time',
+        String(Math.min(limits.maxRuntimeSeconds, 30)),
+        '--max-filesize',
+        String(Math.min(limits.maxOutputBytes, 2 * 1024 * 1024)),
+        target,
+      ],
+      undefined,
+      limits,
+      signal,
+    );
+  }
+
   async health(): Promise<Record<ScannerName, ScannerHealth>> {
+    const safe = await this.imageHealth(this.image);
+    const raw = this.rawEnabled
+      ? await this.imageHealth(this.rawImage)
+      : {
+          available: false,
+          detail:
+            'raw profile disabled; set PENTESTERFLOW_ENABLE_RAW_SCANNER=1 and build scanner:build:raw',
+        };
+    const safeNames = [
+      'subfinder',
+      'dnsx',
+      'httpx',
+      'katana',
+      'nuclei',
+      'ffuf',
+      'nmap_connect',
+      'validate_http',
+    ] as const;
+    return {
+      ...(Object.fromEntries(
+        safeNames.map((name) => [
+          name,
+          {
+            ...safe,
+            isolation: 'docker' as const,
+            image: this.image,
+            profile: 'safe' as const,
+            enabled: true,
+          },
+        ]),
+      ) as Record<(typeof safeNames)[number], ScannerHealth>),
+      nmap_raw: {
+        ...raw,
+        isolation: 'docker',
+        image: this.rawImage,
+        profile: 'raw',
+        enabled: this.rawEnabled,
+      },
+    };
+  }
+
+  private async imageHealth(image: string): Promise<{ available: boolean; detail: string }> {
     let available = false;
-    let detail = `Docker image ${this.image} is not built. Run: npm run scanner:build`;
+    let detail = `Docker image ${image} is not built`;
     try {
-      const result = await execa(this.dockerBinary, ['image', 'inspect', this.image], {
+      const result = await execa(this.dockerBinary, ['image', 'inspect', image], {
         reject: false,
         timeout: 5000,
         extendEnv: false,
         env: dockerEnvironment(),
       });
       available = result.exitCode === 0;
-      if (available) detail = `${this.image} ready`;
+      if (available) detail = `${image} ready`;
       else if (result.stderr) detail = clean(result.stderr).slice(0, 300);
     } catch (error) {
       detail = `Docker unavailable: ${safeMessage(error)}`;
     }
-    return Object.fromEntries(
-      (['subfinder', 'dnsx', 'httpx', 'katana', 'nuclei'] as const).map((name) => [
-        name,
-        { available, detail, isolation: 'docker' as const, image: this.image },
-      ]),
-    ) as Record<ScannerName, ScannerHealth>;
+    return { available, detail };
   }
 
   private async run(
@@ -219,6 +382,15 @@ export class DockerScannerRunner {
     limits: ScannerLimits,
     signal: AbortSignal,
   ): Promise<ScannerResult> {
+    const raw = scanner === 'nmap_raw';
+    if (raw && !this.rawEnabled) throw new Error('raw-socket scanner profile is disabled');
+    const image = raw ? this.rawImage : this.image;
+    const executable =
+      scanner === 'nmap_connect' || scanner === 'nmap_raw'
+        ? 'nmap'
+        : scanner === 'validate_http'
+          ? 'curl'
+          : scanner;
     const containerName = `agent-workbench-scan-${randomUUID()}`;
     const args = [
       'run',
@@ -227,9 +399,10 @@ export class DockerScannerRunner {
       containerName,
       '--read-only',
       '--user',
-      '65532:65532',
+      raw ? '0:0' : '65532:65532',
       '--cap-drop',
       'ALL',
+      ...(raw ? ['--cap-add', 'NET_RAW'] : []),
       '--security-opt',
       'no-new-privileges:true',
       '--pids-limit',
@@ -241,7 +414,9 @@ export class DockerScannerRunner {
       '--network',
       'bridge',
       '--tmpfs',
-      '/tmp:rw,noexec,nosuid,nodev,size=128m,uid=65532,gid=65532',
+      raw
+        ? '/tmp:rw,noexec,nosuid,nodev,size=128m,uid=0,gid=0'
+        : '/tmp:rw,noexec,nosuid,nodev,size=128m,uid=65532,gid=65532',
       '--env',
       'HOME=/tmp/home',
       '--env',
@@ -249,15 +424,15 @@ export class DockerScannerRunner {
       '--env',
       'XDG_CONFIG_HOME=/tmp/config',
       '--label',
-      'io.agent-workbench.role=scanner-safe',
+      `io.agent-workbench.role=scanner-${raw ? 'raw' : 'safe'}`,
       '-i',
-      this.image,
-      scanner,
+      image,
+      executable,
       ...scannerArgs,
     ];
     try {
       const result = await execa(this.dockerBinary, args, {
-        input,
+        input: input ?? '',
         cancelSignal: signal,
         reject: false,
         timeout: limits.maxRuntimeSeconds * 1000,
@@ -269,6 +444,8 @@ export class DockerScannerRunner {
         stdout: clean(result.stdout),
         stderr: clean(result.stderr),
         exitCode: result.exitCode ?? 1,
+        profile: raw ? 'raw' : 'safe',
+        image,
       };
     } catch (error) {
       if (signal.aborted) throw error;

@@ -1,6 +1,7 @@
-import { Agent } from '../agent/agent.js';
+import type { Agent } from '../agent/agent.js';
 import type { AgentEvent } from '../agent/events.js';
 import { AlwaysAllow } from '../permission/permission.js';
+import { createAgentRuntime } from '../runtime/agentRuntime.js';
 import { newRegistry as newSkillRegistry } from '../skills/registry.js';
 import { Target } from '../target/target.js';
 import { Registry as ToolRegistry } from '../tools/registry.js';
@@ -17,8 +18,11 @@ import type { EngagementRow, WebDatabase } from './storage/database.js';
 import { SqliteSessionStore } from './storage/sqliteSessionStore.js';
 import {
   DnsxTool,
+  FfufProposalTool,
+  HttpValidationProposalTool,
   HttpxTool,
   KatanaProposalTool,
+  NmapProposalTool,
   NucleiProposalTool,
   type ReconToolContext,
   ScopeTargetsTool,
@@ -50,6 +54,10 @@ export function createWebToolRegistry(
   tools.register(new HttpxTool(context, runner, artifacts, database));
   tools.register(new KatanaProposalTool(context, actions));
   tools.register(new NucleiProposalTool(context, actions));
+  tools.register(new FfufProposalTool(context, actions));
+  tools.register(new NmapProposalTool(context, actions, false));
+  tools.register(new NmapProposalTool(context, actions, true));
+  tools.register(new HttpValidationProposalTool(context, actions));
   tools.register(new WebCoverageTool(context, database));
   return tools;
 }
@@ -590,30 +598,33 @@ export class WebRuntimeManager {
     const runtime: LiveSession = {
       engagement,
       currentTurnId: undefined,
-      agent: new Agent({
-        client: this.createProviderClient(
-          sessionId,
-          previewContext,
-          session.provider,
-          session.model,
-        ),
-        tools: createWebToolRegistry(
-          context,
-          this.runner,
-          this.artifacts,
-          this.database,
-          this.actions,
-        ),
-        skills: newSkillRegistry(),
-        prompter: new AlwaysAllow(),
-        store,
-        target,
-        maxSteps: 10,
-        autoCompactThreshold: 12_000,
-        toolingProfile: 'minimal',
-        promptProfile: 'general',
-        engagement: webEngagementPrompt(engagement),
-      }),
+      agent: createAgentRuntime(
+        {
+          client: this.createProviderClient(
+            sessionId,
+            previewContext,
+            session.provider,
+            session.model,
+          ),
+          tools: createWebToolRegistry(
+            context,
+            this.runner,
+            this.artifacts,
+            this.database,
+            this.actions,
+          ),
+          skills: newSkillRegistry(),
+          prompter: new AlwaysAllow(),
+          store,
+          target,
+          maxSteps: 10,
+          autoCompactThreshold: 12_000,
+          toolingProfile: 'minimal',
+          promptProfile: 'general',
+          engagement: webEngagementPrompt(engagement),
+        },
+        'web',
+      ).agent,
     };
     Object.defineProperty(holder, 'currentTurnId', { get: () => runtime.currentTurnId });
     if (runtime.agent.hasSavedSession()) runtime.agent.resumeSaved();

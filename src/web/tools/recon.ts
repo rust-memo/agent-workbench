@@ -474,6 +474,208 @@ export class NucleiProposalTool implements Tool {
   }
 }
 
+export class FfufProposalTool implements Tool {
+  constructor(
+    private readonly context: ReconToolContext,
+    private readonly actions: ActionService,
+  ) {}
+  name(): string {
+    return 'ffuf';
+  }
+  description(): string {
+    return 'Propose approval-gated FFUF content discovery using the fixed built-in wordlist, scope limits, and no arbitrary request templates.';
+  }
+  schema(): Record<string, unknown> {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      required: ['inputArtifactId', 'reason'],
+      properties: {
+        inputArtifactId: { type: 'string', format: 'uuid' },
+        matchCodes: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 20,
+          uniqueItems: true,
+          items: { type: 'integer', minimum: 100, maximum: 599 },
+          default: [200, 204, 301, 302, 307, 401, 403],
+        },
+        maxTargets: { type: 'integer', minimum: 1, maximum: 3, default: 1 },
+        reason: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    };
+  }
+  requiresPermission(): boolean {
+    return false;
+  }
+  async run(args: Record<string, unknown>): Promise<string> {
+    const parsed = z
+      .object({
+        inputArtifactId: z.string().uuid(),
+        matchCodes: z
+          .array(z.number().int().min(100).max(599))
+          .min(1)
+          .max(20)
+          .default([200, 204, 301, 302, 307, 401, 403]),
+        maxTargets: z.number().int().min(1).max(3).default(1),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .strict()
+      .parse(args);
+    return proposalResult(
+      this.actions.propose({
+        engagementId: this.context.engagementId,
+        sessionId: this.context.sessionId,
+        turnId: this.context.turnId(),
+        action: 'ffuf',
+        arguments: {
+          inputArtifactId: parsed.inputArtifactId,
+          matchCodes: [...new Set(parsed.matchCodes)].sort((a, b) => a - b),
+          maxTargets: parsed.maxTargets,
+        },
+        reason: parsed.reason,
+        scopeVersion: this.context.scope().version,
+        mode: 'RECON',
+      }),
+    );
+  }
+}
+
+export class NmapProposalTool implements Tool {
+  constructor(
+    private readonly context: ReconToolContext,
+    private readonly actions: ActionService,
+    private readonly raw: boolean,
+  ) {}
+  name(): string {
+    return this.raw ? 'nmap_raw' : 'nmap_connect';
+  }
+  description(): string {
+    return this.raw
+      ? 'Propose a separately isolated Nmap SYN scan. Requires the opt-in raw profile, NET_RAW only, and explicit high-risk approval.'
+      : 'Propose a non-raw Nmap TCP connect scan with a bounded explicit port list and high-risk approval.';
+  }
+  schema(): Record<string, unknown> {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      required: ['inputArtifactId', 'ports', 'reason'],
+      properties: {
+        inputArtifactId: { type: 'string', format: 'uuid' },
+        ports: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 128,
+          uniqueItems: true,
+          items: { type: 'integer', minimum: 1, maximum: 65535 },
+        },
+        reason: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    };
+  }
+  requiresPermission(): boolean {
+    return false;
+  }
+  async run(args: Record<string, unknown>): Promise<string> {
+    if (this.raw && !this.actions.rawProfileAvailable())
+      throw new Error(
+        'raw Nmap profile is disabled; the operator must restart the server with PENTESTERFLOW_ENABLE_RAW_SCANNER=1',
+      );
+    const parsed = z
+      .object({
+        inputArtifactId: z.string().uuid(),
+        ports: z.array(z.number().int().min(1).max(65535)).min(1).max(128),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .strict()
+      .parse(args);
+    return proposalResult(
+      this.actions.propose({
+        engagementId: this.context.engagementId,
+        sessionId: this.context.sessionId,
+        turnId: this.context.turnId(),
+        action: this.raw ? 'nmap_raw' : 'nmap_connect',
+        arguments: {
+          inputArtifactId: parsed.inputArtifactId,
+          ports: [...new Set(parsed.ports)].sort((a, b) => a - b),
+        },
+        reason: parsed.reason,
+        scopeVersion: this.context.scope().version,
+        mode: 'RECON',
+      }),
+    );
+  }
+}
+
+export class HttpValidationProposalTool implements Tool {
+  constructor(
+    private readonly context: ReconToolContext,
+    private readonly actions: ActionService,
+  ) {}
+  name(): string {
+    return 'validate_http';
+  }
+  description(): string {
+    return 'Propose a deterministic, no-redirect GET/HEAD reproduction request for an existing scanner finding. Evidence is saved but never auto-confirms the finding.';
+  }
+  schema(): Record<string, unknown> {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      required: ['findingId', 'reason'],
+      properties: {
+        findingId: { type: 'string', format: 'uuid' },
+        method: { type: 'string', enum: ['GET', 'HEAD'], default: 'GET' },
+        expectedStatus: { type: 'integer', minimum: 100, maximum: 599 },
+        bodyContains: { type: 'string', minLength: 1, maxLength: 200 },
+        reason: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    };
+  }
+  requiresPermission(): boolean {
+    return false;
+  }
+  async run(args: Record<string, unknown>): Promise<string> {
+    const parsed = z
+      .object({
+        findingId: z.string().uuid(),
+        method: z.enum(['GET', 'HEAD']).default('GET'),
+        expectedStatus: z.number().int().min(100).max(599).optional(),
+        bodyContains: z.string().min(1).max(200).optional(),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .strict()
+      .parse(args);
+    return proposalResult(
+      this.actions.propose({
+        engagementId: this.context.engagementId,
+        sessionId: this.context.sessionId,
+        turnId: this.context.turnId(),
+        action: 'validate_http',
+        arguments: {
+          findingId: parsed.findingId,
+          method: parsed.method,
+          expectedStatus: parsed.expectedStatus,
+          bodyContains: parsed.bodyContains,
+        },
+        reason: parsed.reason,
+        scopeVersion: this.context.scope().version,
+        mode: 'RECON',
+      }),
+    );
+  }
+}
+
+function proposalResult(proposal: import('../types.js').ActionProposalRecord): string {
+  return JSON.stringify({
+    proposalId: proposal.id,
+    status: proposal.status,
+    risk: proposal.risk,
+    expiresAt: proposal.expiresAt,
+    approvalRequired: true,
+  });
+}
+
 export class WebCoverageTool implements Tool {
   constructor(
     private readonly context: ReconToolContext,

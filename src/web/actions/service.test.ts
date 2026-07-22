@@ -51,7 +51,20 @@ describe.skipIf(!supportsNodeSqlite)('approved scanner actions', () => {
       .map((row) => JSON.stringify(row))
       .join('\n');
     const runner = {
-      nuclei: async () => ({ stdout: `${scannerOutput}\n`, stderr: '', exitCode: 0 }),
+      nuclei: async () => ({
+        stdout: `${scannerOutput}\n`,
+        stderr: '',
+        exitCode: 0,
+        profile: 'safe',
+        image: 'test-safe',
+      }),
+      validateHttp: async () => ({
+        stdout: 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nvalidated-marker',
+        stderr: '',
+        exitCode: 0,
+        profile: 'safe',
+        image: 'test-safe',
+      }),
     } as unknown as DockerScannerRunner;
     const actions = new ActionService(database, artifacts, events, runner);
     const proposal = actions.propose({
@@ -75,6 +88,34 @@ describe.skipIf(!supportsNodeSqlite)('approved scanner actions', () => {
       },
     ]);
     expect(database.coverageSummary(session.id)).toMatchObject({ total: 1, tried: 1 });
+
+    const finding = database.listFindings(session.id)[0];
+    if (!finding) throw new Error('expected scanner finding');
+    const validation = actions.propose({
+      engagementId: engagement.id,
+      sessionId: session.id,
+      action: 'validate_http',
+      arguments: {
+        findingId: finding.id,
+        method: 'GET',
+        expectedStatus: 200,
+        bodyContains: 'validated-marker',
+      },
+      reason: 'bounded HTTP evidence check',
+      scopeVersion: engagement.scope.version,
+      mode: engagement.mode,
+    });
+    expect(validation.risk).toBe('high');
+    await actions.executeClaimed(
+      actions.claim(validation.id, validation.approvalHash, 'browser-session'),
+      new AbortController().signal,
+    );
+    expect(database.getFinding(finding.id)?.status).toBe('needs_validation');
+    expect(database.listCoverage(session.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ vulnerabilityClass: 'validation:safe-test', status: 'passed' }),
+      ]),
+    );
     database.close();
   });
 });

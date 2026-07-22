@@ -11,7 +11,6 @@ import { type FSWatcher, existsSync, watch as fsWatch, renameSync } from 'node:f
 import { homedir } from 'node:os';
 import { render } from 'ink';
 import React from 'react';
-import { Agent } from '../agent/agent.js';
 import type { PromptProfile } from '../agent/systemPrompt.js';
 import { type IngestServerHandle, startIngestServer } from '../browser/server.js';
 import { CaptureStore } from '../browser/store.js';
@@ -37,6 +36,7 @@ import * as logger from '../logger/logger.js';
 import { createSessionDebugLog } from '../logger/sessionDebug.js';
 import { MemoryStore } from '../memory/store.js';
 import { YoloPrompter } from '../permission/permission.js';
+import { createAgentRuntime } from '../runtime/agentRuntime.js';
 import * as sessionStore from '../session/store.js';
 import { skillSearchDirs } from '../skills/discovery.js';
 import { LoadSkillTool } from '../skills/loadSkill.js';
@@ -518,25 +518,29 @@ async function main(): Promise<number> {
 
   // Session + agent. (sessionID + sessionStoreInstance were created up
   // top so coverage / future per-session stores can reuse them.)
-  const agent = new Agent({
-    client,
-    tools,
-    skills,
-    prompter,
-    store: sessionStoreInstance,
-    target,
-    thinkingEnabled: cfg.thinking_enabled,
-    maxSteps: cfg.max_steps > 0 ? cfg.max_steps : undefined,
-    autoCompactThreshold: effectiveAutoCompactThreshold(cfg),
-    toolingProfile: cfg.tooling_profile,
-    promptProfile: effectivePromptProfile(cfg),
-    intelligence: intelligenceStore,
-    memoryStore,
-    engagement,
-    // --no-stream takes precedence over the config default so users can
-    // toggle off streaming for a single launch without rewriting config.
-    streamingEnabled: flags.noStream ? false : cfg.streaming_enabled,
-  });
+  const agentRuntime = createAgentRuntime(
+    {
+      client,
+      tools,
+      skills,
+      prompter,
+      store: sessionStoreInstance,
+      target,
+      thinkingEnabled: cfg.thinking_enabled,
+      maxSteps: cfg.max_steps > 0 ? cfg.max_steps : undefined,
+      autoCompactThreshold: effectiveAutoCompactThreshold(cfg),
+      toolingProfile: cfg.tooling_profile,
+      promptProfile: effectivePromptProfile(cfg),
+      intelligence: intelligenceStore,
+      memoryStore,
+      engagement,
+      // --no-stream takes precedence over the config default so users can
+      // toggle off streaming for a single launch without rewriting config.
+      streamingEnabled: flags.noStream ? false : cfg.streaming_enabled,
+    },
+    'cli',
+  );
+  const agent = agentRuntime.agent;
 
   let resumeSummary = '';
   if (resuming) {

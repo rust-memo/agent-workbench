@@ -132,7 +132,7 @@ export class WebDatabase {
         engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         turn_id TEXT,
-        action TEXT NOT NULL CHECK(action IN ('katana','nuclei')),
+        action TEXT NOT NULL CHECK(action IN ('katana','nuclei','ffuf','nmap_connect','nmap_raw','validate_http')),
         arguments_json TEXT NOT NULL,
         reason TEXT NOT NULL,
         risk TEXT NOT NULL CHECK(risk IN ('medium','high')),
@@ -189,7 +189,15 @@ export class WebDatabase {
         UNIQUE(session_id, endpoint, parameter, vulnerability_class)
       );
       CREATE INDEX IF NOT EXISTS coverage_session_status ON coverage(session_id, status);
+      CREATE TABLE IF NOT EXISTS legacy_imports (
+        source_sha256 TEXT PRIMARY KEY,
+        file_name TEXT NOT NULL,
+        source_updated_at TEXT,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        imported_at TEXT NOT NULL
+      );
     `);
+    this.migrateActionProposalActions();
     const sessionColumns = this.db.prepare('PRAGMA table_info(sessions)').all() as Array<{
       name: string;
     }>;
@@ -208,6 +216,45 @@ export class WebDatabase {
     this.db.exec(
       "UPDATE sessions SET state = 'error' WHERE state = 'running'; UPDATE turns SET status = 'error', completed_at = datetime('now') WHERE status = 'running'; UPDATE action_proposals SET status = 'failed', error = 'server restarted during execution', updated_at = datetime('now') WHERE status = 'running';",
     );
+  }
+
+  private migrateActionProposalActions(): void {
+    const row = this.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'action_proposals'")
+      .get() as { sql?: string } | undefined;
+    if (row?.sql?.includes("'validate_http'")) return;
+    this.db.exec(`
+      PRAGMA foreign_keys=OFF;
+      BEGIN IMMEDIATE;
+      CREATE TABLE action_proposals_v4 (
+        id TEXT PRIMARY KEY,
+        engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        turn_id TEXT,
+        action TEXT NOT NULL CHECK(action IN ('katana','nuclei','ffuf','nmap_connect','nmap_raw','validate_http')),
+        arguments_json TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        risk TEXT NOT NULL CHECK(risk IN ('medium','high')),
+        scope_version INTEGER NOT NULL,
+        approval_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending','running','completed','failed','cancelled','expired')),
+        expires_at TEXT NOT NULL,
+        approved_by TEXT,
+        approved_at TEXT,
+        consumed_at TEXT,
+        result_artifact_id TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO action_proposals_v4 SELECT * FROM action_proposals;
+      DROP TABLE action_proposals;
+      ALTER TABLE action_proposals_v4 RENAME TO action_proposals;
+      CREATE INDEX action_proposals_session_created
+        ON action_proposals(session_id, created_at DESC);
+      COMMIT;
+      PRAGMA foreign_keys=ON;
+    `);
   }
 
   createEngagement(name: string, scope: ScopeDefinition, mode: WebMode): EngagementRow {
@@ -542,6 +589,13 @@ export class WebDatabase {
     ).map(findingFromRow);
   }
 
+  getFinding(id: string): WebFindingRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM findings WHERE id = ?').get(id) as
+      | SqlRow
+      | undefined;
+    return row ? findingFromRow(row) : undefined;
+  }
+
   updateFindingStatus(
     id: string,
     sessionId: string,
@@ -635,6 +689,91 @@ export class WebDatabase {
       summary.total += Number(row.count);
     }
     return summary;
+  }
+
+  getLegacyImport(sourceSha256: string): { sessionId: string; importedAt: string } | undefined {
+    const row = this.db
+      .prepare('SELECT session_id, imported_at FROM legacy_imports WHERE source_sha256 = ?')
+      .get(sourceSha256) as { session_id: string; imported_at: string } | undefined;
+    return row ? { sessionId: row.session_id, importedAt: row.imported_at } : undefined;
+  }
+
+  recordLegacyImport(input: {
+    sourceSha256: string;
+    fileName: string;
+    sourceUpdatedAt?: string;
+    sessionId: string;
+  }): void {
+    this.db
+      .prepare(
+        'INSERT INTO legacy_imports (source_sha256, file_name, source_updated_at, session_id, imported_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(
+        input.sourceSha256,
+        input.fileName,
+        input.sourceUpdatedAt ?? null,
+        input.sessionId,
+        new Date().toISOString(),
+      );
+  }
+
+  exportSession(sessionId: string): Record<string, unknown> {
+    const session = this.getSession(sessionId);
+    if (!session) throw new Error('session not found');
+    const engagement = this.getEngagement(session.engagementId);
+    if (!engagement) throw new Error('engagement not found');
+    const state = this.db
+      .prepare('SELECT target_json, memory_json, context_snapshot FROM sessions WHERE id = ?')
+      .get(sessionId) as {
+      target_json: string | null;
+      memory_json: string | null;
+      context_snapshot: string | null;
+    };
+    const messages = this.db
+      .prepare('SELECT message_json FROM messages WHERE session_id = ? ORDER BY ordinal')
+      .all(sessionId) as Array<{ message_json: string }>;
+    const turns = this.db
+      .prepare(
+        'SELECT id, status, user_message, created_at, completed_at FROM turns WHERE session_id = ? ORDER BY created_at',
+      )
+      .all(sessionId);
+    return {
+      format: 'agent-workbench-session',
+      formatVersion: 1,
+      exportedAt: new Date().toISOString(),
+      engagement,
+      session,
+      target: state.target_json ? JSON.parse(state.target_json) : null,
+      memory: state.memory_json ? JSON.parse(state.memory_json) : null,
+      contextSnapshot: state.context_snapshot,
+      messages: messages.map((row) => JSON.parse(row.message_json)),
+      turns,
+      events: this.eventsAfter(0, sessionId, 100_000),
+      artifacts: this.listArtifacts(sessionId),
+      actions: this.listActionProposals(sessionId),
+      findings: this.listFindings(sessionId),
+      coverage: this.listCoverage(sessionId),
+    };
+  }
+
+  deleteSession(sessionId: string): void {
+    if (!this.getSession(sessionId)) throw new Error('session not found');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM findings WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM coverage WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM action_proposals WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM turns WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM events WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM audit_log WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM artifacts WHERE session_id = ?').run(sessionId);
+      this.db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 }
 

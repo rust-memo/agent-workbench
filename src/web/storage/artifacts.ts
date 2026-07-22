@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   unlinkSync,
 } from 'node:fs';
 import { chmod, open } from 'node:fs/promises';
@@ -161,6 +162,32 @@ export class ArtifactStore {
       }
     }
     return result;
+  }
+
+  deleteSession(sessionId: string): number {
+    const records = this.database.listArtifacts(sessionId);
+    let removed = 0;
+    for (const record of records) {
+      const path = this.resolveStoredPath(record.relativePath);
+      const info = lstatSync(path, { throwIfNoEntry: false });
+      if (!info) continue;
+      if (!info.isFile() || info.isSymbolicLink())
+        throw new Error('refusing to delete a non-regular artifact');
+      unlinkSync(path);
+      removed += 1;
+    }
+    const engagementId = records[0]?.engagementId;
+    if (engagementId) {
+      const sessionDir = resolve(this.root, engagementId, sessionId);
+      if (sessionDir.startsWith(`${this.root}/`)) {
+        try {
+          rmdirSync(sessionDir);
+        } catch {
+          /* only prune an empty, exact session directory */
+        }
+      }
+    }
+    return removed;
   }
 
   private resolveStoredPath(relativePath: string): string {

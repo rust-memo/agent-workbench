@@ -9,7 +9,7 @@
 }
 body {
   margin: 0;
-  min-width: 1080px;
+  min-width: 920px;
   min-height: 100vh;
   background: radial-gradient(circle at 45% -10%, #14243a 0, #080b11 38%);
 }
@@ -24,7 +24,7 @@ a {
 .shell {
   min-height: 100vh;
   display: grid;
-  grid-template: 68px calc(100vh - 68px) / 250px minmax(560px, 1fr) 310px;
+  grid-template: 68px calc(100vh - 68px) / var(--sidebar-width, 250px) 6px minmax(440px, 1fr) 6px var(--inspector-width, 330px);
 }
 .topbar {
   grid-column: 1 / -1;
@@ -174,10 +174,37 @@ a {
   background: #0b0f17;
 }
 .sidebar {
+  grid-column: 1;
   border-right: 1px solid #1d2634;
 }
 .inspector {
+  grid-column: 5;
   border-left: 1px solid #1d2634;
+}
+.splitter {
+  position: relative;
+  z-index: 4;
+  cursor: col-resize;
+  background: #0a0e15;
+  touch-action: none;
+}
+.splitter::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: #202b3a;
+  transition: background .15s ease, box-shadow .15s ease;
+}
+.splitter:hover::after,
+body.resizing .splitter::after {
+  background: #42d9a4;
+  box-shadow: 0 0 14px #42d9a455;
+}
+.splitter-left { grid-column: 2; }
+.splitter-right { grid-column: 4; }
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 .section-title {
   height: 30px;
@@ -293,10 +320,32 @@ a {
   margin: 10px 0 0;
 }
 .terminal-panel {
+  grid-column: 3;
   min-width: 0;
   display: grid;
   grid-template-rows: 64px auto minmax(180px, 1fr) auto;
   background: #090d14;
+}
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.panel-actions button,
+.export-button {
+  color: #91a5bd;
+  border: 1px solid #2b394d;
+  background: #101824;
+  border-radius: 7px;
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 10px;
+  text-decoration: none;
+}
+.panel-actions .danger {
+  color: #ff8b92;
+  border-color: #6f3037;
+  background: #2a1419;
 }
 .panel-head {
   display: flex;
@@ -462,6 +511,25 @@ a {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: 10px / 1.55 "JetBrains Mono", ui-monospace, monospace;
+}
+.terminal-compact .progress-dock {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.terminal-compact .progress-stages {
+  display: none;
+}
+.terminal-compact .terminal {
+  padding-top: 7px;
+}
+.terminal-compact .event-line {
+  margin-bottom: 2px;
+  padding-bottom: 6px;
+}
+.terminal-compact .event-line pre {
+  margin-top: 3px;
+  font-size: 9px;
+  line-height: 1.35;
 }
 .composer-wrap {
   position: relative;
@@ -704,6 +772,17 @@ a {
   font-size: 8px;
   padding: 5px;
 }
+.validate-button {
+  width: 100%;
+  margin: 1px 0 7px;
+  padding: 6px;
+  border: 1px solid #315b76;
+  border-radius: 5px;
+  color: #83c9ef;
+  background: #122433;
+  cursor: pointer;
+  font-size: 8px;
+}
 .severity {
   padding: 2px 5px;
   border-radius: 4px;
@@ -759,6 +838,77 @@ a {
   font-size: 9px;
   letter-spacing: .1em;
 }
+.legacy-list {
+  display: grid;
+  gap: 6px;
+}
+.legacy-card {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid #233044;
+  border-radius: 7px;
+  background: #0e151f;
+}
+.legacy-card strong {
+  overflow: hidden;
+  color: #aab8ca;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.legacy-card small {
+  overflow: hidden;
+  color: #64748a;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.legacy-card span {
+  color: #57d8a8;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+.legacy-card button {
+  padding: 5px;
+  border: 1px solid #315c4d;
+  border-radius: 5px;
+  color: #6bdfb4;
+  background: #132a23;
+  cursor: pointer;
+  font-size: 8px;
+}
+.scanner-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+.scanner-grid > span {
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid #243143;
+  border-radius: 6px;
+  color: #77869a;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scanner-grid i {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 3px;
+  border-radius: 50%;
+  background: #ef7680;
+}
+.scanner-grid .ready i {
+  background: #48dda7;
+  box-shadow: 0 0 7px #48dda7;
+}
+.scanner-grid small {
+  color: #4b5d74;
+  text-transform: uppercase;
+}
 .empty {
   color: #5f6d81;
   padding: 16px 8px;
@@ -801,6 +951,9 @@ a {
 }
 @media (max-width: 1250px) {
   .shell {
-    grid-template-columns: 220px minmax(520px, 1fr) 270px;
+    --sidebar-width: 220px !important;
+    --inspector-width: 280px !important;
   }
+  .top-status { display: none; }
+  .provider-switcher select.model-select { width: 170px; }
 }

@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   type ActionProposal,
@@ -6,6 +13,7 @@ import {
   type CoverageResponse,
   type Engagement,
   type Finding,
+  type LegacySession,
   type RuntimeEvent,
   type Session,
   type SlashCommand,
@@ -28,6 +36,7 @@ function App(): React.ReactElement {
   const [coverage, setCoverage] = useState<CoverageResponse>({ summary: {}, rows: [] });
   const [status, setStatus] = useState<WorkbenchStatus | null>(null);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
+  const [legacySessions, setLegacySessions] = useState<LegacySession[]>([]);
   const [providerDraft, setProviderDraft] = useState<Session['provider']>('qwen');
   const [modelDraft, setModelDraft] = useState('default');
   const [checkingProviders, setCheckingProviders] = useState(false);
@@ -35,6 +44,9 @@ function App(): React.ReactElement {
   const [cancellingSession, setCancellingSession] = useState('');
   const [error, setError] = useState('');
   const [clearedThrough, setClearedThrough] = useState<Record<string, number>>({});
+  const [sidebarWidth, setSidebarWidth] = useState(250);
+  const [inspectorWidth, setInspectorWidth] = useState(330);
+  const [terminalCompact, setTerminalCompact] = useState(false);
   const lastSeq = useRef(0);
 
   const refreshSessionData = useCallback(async (sessionId: string) => {
@@ -51,16 +63,18 @@ function App(): React.ReactElement {
   }, []);
 
   const refresh = useCallback(async () => {
-    const [nextEngagements, nextSessions, nextStatus, nextCommands] = await Promise.all([
+    const [nextEngagements, nextSessions, nextStatus, nextCommands, nextLegacy] = await Promise.all([
       api<Engagement[]>('/engagements'),
       api<Session[]>('/sessions'),
       api<WorkbenchStatus>('/status'),
       api<SlashCommand[]>('/commands'),
+      api<LegacySession[]>('/legacy-sessions'),
     ]);
     setEngagements(nextEngagements);
     setSessions(nextSessions);
     setStatus(nextStatus);
     setCommands(nextCommands);
+    setLegacySessions(nextLegacy);
     setSelected((current) => current || nextSessions[0]?.id || '');
   }, []);
 
@@ -304,6 +318,84 @@ function App(): React.ReactElement {
     }
   };
 
+  const proposeValidation = async (finding: Finding): Promise<void> => {
+    if (!selected) return;
+    const expected = window.prompt('Expected HTTP status (optional)', '200')?.trim();
+    const bodyContains = window.prompt('Literal response text to require (optional)')?.trim();
+    try {
+      await api(`/sessions/${selected}/findings/${finding.id}/validation-proposals`, {
+        method: 'POST',
+        body: JSON.stringify({
+          method: 'GET',
+          ...(expected ? { expectedStatus: Number(expected) } : {}),
+          ...(bodyContains ? { bodyContains } : {}),
+          reason: `Reproduce scanner signal ${finding.scannerReference} with a bounded GET request`,
+        }),
+      });
+      await refreshSessionData(selected);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const importLegacy = async (legacy: LegacySession): Promise<void> => {
+    const title = window.prompt('Imported session title', legacy.fileName.replace(/\.json$/, ''));
+    if (!title) return;
+    const allowedHost = window
+      .prompt('Authorized host if the old session has no target (optional)', '')
+      ?.trim();
+    try {
+      const imported = await api<{ session: Session }>(`/legacy-sessions/${legacy.id}/import`, {
+        method: 'POST',
+        body: JSON.stringify({
+          title,
+          provider: providerDraft,
+          model: modelDraft || 'default',
+          mode: 'PLAN',
+          ...(allowedHost ? { allowedHosts: [allowedHost] } : {}),
+        }),
+      });
+      await refresh();
+      setSelected(imported.session.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const deleteActiveSession = async (): Promise<void> => {
+    if (!activeSession) return;
+    const confirmation = window.prompt(
+      `Type the exact session title to permanently delete its SQLite state and artifacts:\n\n${activeSession.title}`,
+    );
+    if (confirmation !== activeSession.title) return;
+    try {
+      await api(`/sessions/${activeSession.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ confirmTitle: confirmation }),
+      });
+      setSelected('');
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const startResize = (side: 'left' | 'right', event: React.PointerEvent): void => {
+    event.preventDefault();
+    document.body.classList.add('resizing');
+    const move = (pointer: PointerEvent): void => {
+      if (side === 'left') setSidebarWidth(Math.min(420, Math.max(190, pointer.clientX)));
+      else setInspectorWidth(Math.min(520, Math.max(280, window.innerWidth - pointer.clientX)));
+    };
+    const stop = (): void => {
+      document.body.classList.remove('resizing');
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop, { once: true });
+  };
+
   if (auth === 'loading')
     return (
       <Centered title="Starting secure workbench…" detail="Restoring the local browser session." />
@@ -318,13 +410,21 @@ function App(): React.ReactElement {
     );
 
   return (
-    <div className="shell">
+    <div
+      className={`shell ${terminalCompact ? 'terminal-compact' : ''}`}
+      style={
+        {
+          '--sidebar-width': `${sidebarWidth}px`,
+          '--inspector-width': `${inspectorWidth}px`,
+        } as CSSProperties
+      }
+    >
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark">AW</span>
           <div>
             <strong>Agent Workbench</strong>
-            <small>Local AI Security Workbench · v0.3.2</small>
+            <small>Local AI Security Workbench · v0.4.0</small>
           </div>
         </div>
         <div className="provider-switcher">
@@ -445,7 +545,34 @@ function App(): React.ReactElement {
             <p>Discovery may be recorded outside scope. Active actions stay restricted.</p>
           </div>
         )}
+        <div className="section-title inspector-gap">
+          <span>Legacy JSON</span>
+          <span className="count">{legacySessions.filter((item) => !item.imported).length}</span>
+        </div>
+        <div className="legacy-list">
+          {legacySessions.slice(0, 5).map((legacy) => (
+            <article className="legacy-card" key={legacy.id}>
+              <strong>{legacy.fileName}</strong>
+              <small>{legacy.preview}</small>
+              {legacy.imported ? (
+                <span>Imported</span>
+              ) : (
+                <button type="button" onClick={() => void importLegacy(legacy)}>
+                  Import once
+                </button>
+              )}
+            </article>
+          ))}
+          {legacySessions.length === 0 && <div className="empty compact">No CLI JSON sessions.</div>}
+        </div>
       </aside>
+
+      <div
+        className="splitter splitter-left"
+        role="separator"
+        aria-label="Resize sessions panel"
+        onPointerDown={(event) => startResize('left', event)}
+      />
 
       <main className="terminal-panel">
         <div className="panel-head">
@@ -453,16 +580,31 @@ function App(): React.ReactElement {
             <span className="eyebrow">LIVE SESSION</span>
             <h1>{activeSession?.title ?? 'No session selected'}</h1>
           </div>
-          {activeSession?.state === 'running' && (
-            <button
-              type="button"
-              className="danger"
-              disabled={cancellingSession === selected}
-              onClick={() => void cancelTurn()}
-            >
-              {cancellingSession === selected ? 'Cancelling…' : 'Cancel operation'}
+          <div className="panel-actions">
+            <button type="button" onClick={() => setTerminalCompact((current) => !current)}>
+              {terminalCompact ? 'Comfort view' : 'Dense view'}
             </button>
-          )}
+            {activeSession && (
+              <a className="export-button" href={`/api/v1/sessions/${activeSession.id}/export`}>
+                Export redacted
+              </a>
+            )}
+            {activeSession && activeSession.state !== 'running' && (
+              <button type="button" className="danger" onClick={() => void deleteActiveSession()}>
+                Delete
+              </button>
+            )}
+            {activeSession?.state === 'running' && (
+              <button
+                type="button"
+                className="danger"
+                disabled={cancellingSession === selected}
+                onClick={() => void cancelTurn()}
+              >
+                {cancellingSession === selected ? 'Cancelling…' : 'Cancel operation'}
+              </button>
+            )}
+          </div>
         </div>
         <ProgressDock events={visibleEvents} state={activeSession?.state ?? 'idle'} />
         <div className="terminal" role="log" aria-live="polite">
@@ -530,6 +672,13 @@ function App(): React.ReactElement {
         </div>
       </main>
 
+      <div
+        className="splitter splitter-right"
+        role="separator"
+        aria-label="Resize inspector panel"
+        onPointerDown={(event) => startResize('right', event)}
+      />
+
       <aside className="inspector">
         <div className="section-title">
           <span>Approvals</span>
@@ -557,7 +706,7 @@ function App(): React.ReactElement {
             </article>
           ))}
           {proposals.length === 0 && (
-            <div className="empty compact">Katana and Nuclei proposals appear here.</div>
+            <div className="empty compact">Scanner and validation proposals appear here.</div>
           )}
         </div>
         <div className="section-title inspector-gap">
@@ -573,6 +722,15 @@ function App(): React.ReactElement {
               </div>
               <code>{finding.scannerReference}</code>
               <small>{finding.url}</small>
+              {finding.status === 'needs_validation' && (
+                <button
+                  type="button"
+                  className="validate-button"
+                  onClick={() => void proposeValidation(finding)}
+                >
+                  Propose bounded validation
+                </button>
+              )}
               <select
                 aria-label={`Status for ${finding.title}`}
                 value={finding.status}
@@ -614,6 +772,17 @@ function App(): React.ReactElement {
           {artifacts.length === 0 && (
             <div className="empty">Saved evidence will appear here with SHA-256 metadata.</div>
           )}
+        </div>
+        <div className="section-title inspector-gap">
+          <span>Scanner profiles</span>
+          <span className="count">{Object.keys(status?.scanners ?? {}).length}</span>
+        </div>
+        <div className="scanner-grid">
+          {Object.entries(status?.scanners ?? {}).map(([name, scanner]) => (
+            <span key={name} className={scanner.available ? 'ready' : 'offline'} title={scanner.detail}>
+              <i /> {name} <small>{scanner.profile}</small>
+            </span>
+          ))}
         </div>
         <div className="security-note">
           <span>SECURITY BOUNDARY</span>

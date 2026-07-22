@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DockerScannerRunner, SAFE_SCANNER_IMAGE } from './dockerRunner.js';
+import { DockerScannerRunner, RAW_SCANNER_IMAGE, SAFE_SCANNER_IMAGE } from './dockerRunner.js';
 import { clean } from './localRunner.js';
 
 const roots: string[] = [];
@@ -42,7 +42,7 @@ describe('Docker scanner boundary', () => {
       ].join('\n'),
       { mode: 0o700 },
     );
-    const runner = new DockerScannerRunner(SAFE_SCANNER_IMAGE, fakeDocker);
+    const runner = new DockerScannerRunner(SAFE_SCANNER_IMAGE, fakeDocker, RAW_SCANNER_IMAGE, true);
     const target = 'example.com;touch /tmp/owned';
     const result = await runner.dnsx(
       [target],
@@ -71,5 +71,62 @@ describe('Docker scanner boundary', () => {
     expect(run?.args).not.toContain('--volume');
     expect(run?.args.join(' ')).not.toContain('docker.sock');
     expect(run?.args).toContain(SAFE_SCANNER_IMAGE);
+
+    await runner.ffuf(
+      'https://example.com/base',
+      { matchCodes: [200, 403] },
+      {
+        requestsPerSecond: 5,
+        concurrency: 4,
+        maxUrlsPerHost: 100,
+        maxRedirects: 0,
+        maxRuntimeSeconds: 30,
+        maxOutputBytes: 1024 * 1024,
+      },
+      new AbortController().signal,
+    );
+    await runner.nmap(
+      ['example.com'],
+      { ports: [80, 443], raw: true },
+      {
+        requestsPerSecond: 5,
+        concurrency: 4,
+        maxUrlsPerHost: 100,
+        maxRedirects: 0,
+        maxRuntimeSeconds: 30,
+        maxOutputBytes: 1024 * 1024,
+      },
+      new AbortController().signal,
+    );
+    const allCalls = (await readFile(log, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { args: string[]; input: string });
+    const ffuf = allCalls.find((call) => call.args.includes('ffuf'));
+    expect(ffuf?.args).toContain('/opt/wordlists/common.txt');
+    expect(ffuf?.args).toContain('https://example.com/base/FUZZ');
+    const raw = allCalls.find((call) => call.args.includes(RAW_SCANNER_IMAGE));
+    expect(raw?.args).toContain('NET_RAW');
+    expect(raw?.args).toContain('-sS');
+    expect(raw?.args).not.toContain('--privileged');
+  });
+
+  it('fails closed when the raw-socket profile is not explicitly enabled', async () => {
+    const runner = new DockerScannerRunner('safe', 'docker', 'raw', false);
+    await expect(
+      runner.nmap(
+        ['example.com'],
+        { ports: [80], raw: true },
+        {
+          requestsPerSecond: 5,
+          concurrency: 4,
+          maxUrlsPerHost: 100,
+          maxRedirects: 0,
+          maxRuntimeSeconds: 30,
+          maxOutputBytes: 1024 * 1024,
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('raw-socket scanner profile is disabled');
   });
 });

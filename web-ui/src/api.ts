@@ -32,7 +32,10 @@ export interface ProviderCapability {
 export interface WorkbenchStatus {
   version: string;
   providers: ProviderCapability[];
-  scanners: Record<string, { available: boolean; detail: string }>;
+  scanners: Record<
+    string,
+    { available: boolean; detail: string; profile: 'safe' | 'raw'; enabled: boolean }
+  >;
   scopeEnforcement: string;
 }
 export interface RuntimeEvent {
@@ -62,7 +65,13 @@ export interface Artifact {
 export interface ActionProposal {
   id: string;
   sessionId: string;
-  action: 'katana' | 'nuclei';
+  action:
+    | 'katana'
+    | 'nuclei'
+    | 'ffuf'
+    | 'nmap_connect'
+    | 'nmap_raw'
+    | 'validate_http';
   arguments: Record<string, unknown>;
   reason: string;
   risk: 'medium' | 'high';
@@ -71,6 +80,13 @@ export interface ActionProposal {
   expiresAt: string;
   resultArtifactId?: string;
   error?: string;
+}
+export interface LegacySession {
+  id: string;
+  fileName: string;
+  updatedAt: string;
+  preview: string;
+  imported?: { sessionId: string; importedAt: string };
 }
 export interface Finding {
   id: string;

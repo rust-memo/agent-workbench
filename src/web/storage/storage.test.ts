@@ -147,4 +147,30 @@ describe.skipIf(!supportsNodeSqlite)('Web persistence', () => {
     expect(database.listCoverage(sessionId)[0]?.attempts).toBe(2);
     database.close();
   });
+
+  it('upgrades the v0.3 action allowlist without losing the database', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pf-web-v3-migration-'));
+    roots.push(root);
+    const path = join(root, 'db.sqlite3');
+    const sqlite = await import(`node:${'sqlite'}`);
+    const old = new sqlite.DatabaseSync(path);
+    old.exec(`CREATE TABLE action_proposals (
+      id TEXT PRIMARY KEY, engagement_id TEXT NOT NULL, session_id TEXT NOT NULL, turn_id TEXT,
+      action TEXT NOT NULL CHECK(action IN ('katana','nuclei')), arguments_json TEXT NOT NULL,
+      reason TEXT NOT NULL, risk TEXT NOT NULL CHECK(risk IN ('medium','high')),
+      scope_version INTEGER NOT NULL, approval_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('pending','running','completed','failed','cancelled','expired')),
+      expires_at TEXT NOT NULL, approved_by TEXT, approved_at TEXT, consumed_at TEXT,
+      result_artifact_id TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );`);
+    old.close();
+    const { WebDatabase } = await import('./database.js');
+    const database = new WebDatabase(path);
+    const row = database.db
+      .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='action_proposals'")
+      .get() as { sql: string };
+    expect(row.sql).toContain("'validate_http'");
+    expect(database.db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    database.close();
+  });
 });

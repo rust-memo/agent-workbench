@@ -15,12 +15,14 @@ import { createScope, scopeSchema } from './scope.js';
 import { PairingManager } from './security/pairing.js';
 import { ArtifactStore } from './storage/artifacts.js';
 import { WebDatabase } from './storage/database.js';
+import { LegacySessionImporter } from './storage/legacyImport.js';
 
 export interface WebServerOptions {
   port?: number;
   dataDir?: string;
   uiDir?: string;
   ollamaBaseURL?: string;
+  legacySessionsDir?: string;
 }
 
 export interface WebServerHandle {
@@ -80,6 +82,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     options.ollamaBaseURL ?? process.env.PENTESTERFLOW_OLLAMA_URL ?? 'http://127.0.0.1:11434',
   );
   const actions = new ActionService(database, artifacts, events, runner);
+  const legacySessions = new LegacySessionImporter(database, options.legacySessionsDir);
   const runtime = new WebRuntimeManager(database, artifacts, events, runner, providers, actions);
   const app = express();
 
@@ -153,7 +156,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       runner.health(),
     ]);
     res.json({
-      version: '0.3.2',
+      version: '0.4.0',
       providers: providerCapabilities,
       scanners,
       recovery,
@@ -174,6 +177,29 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     const engagementId =
       typeof req.query.engagementId === 'string' ? req.query.engagementId : undefined;
     res.json(database.listSessions(engagementId));
+  });
+  app.get('/api/v1/legacy-sessions', (_req, res) => res.json(legacySessions.list()));
+  app.post('/api/v1/legacy-sessions/:legacyId/import', async (req, res) => {
+    const legacyId = z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .parse(req.params.legacyId);
+    const body = z
+      .object({
+        title: z.string().trim().min(1).max(120),
+        provider: webProvider,
+        model: z
+          .string()
+          .trim()
+          .min(1)
+          .max(160)
+          .regex(/^[a-zA-Z0-9._:@/+\-]+$/),
+        mode: z.enum(['PLAN', 'RECON']).default('PLAN'),
+        allowedHosts: z.array(z.string().trim().min(1).max(253)).min(1).max(100).optional(),
+      })
+      .strict()
+      .parse(req.body);
+    res.status(201).json(await legacySessions.import(legacyId, body));
   });
   app.get('/api/v1/commands', (_req, res) => res.json(WEB_SLASH_COMMANDS));
   app.post('/api/v1/sessions', (req, res) => {
@@ -257,6 +283,41 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
     res.json(database.listActionProposals(id).map(publicProposal));
   });
+  app.post('/api/v1/sessions/:id/findings/:findingId/validation-proposals', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const findingId = z.string().uuid().parse(req.params.findingId);
+    const body = z
+      .object({
+        method: z.enum(['GET', 'HEAD']).default('GET'),
+        expectedStatus: z.number().int().min(100).max(599).optional(),
+        bodyContains: z.string().min(1).max(200).optional(),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .strict()
+      .parse(req.body);
+    const session = database.getSession(id);
+    if (!session) return res.status(404).json({ error: 'session not found' });
+    const finding = database.getFinding(findingId);
+    if (!finding || finding.sessionId !== id)
+      return res.status(404).json({ error: 'finding not found' });
+    const engagement = database.getEngagement(session.engagementId);
+    if (!engagement) return res.status(404).json({ error: 'engagement not found' });
+    const proposal = actions.propose({
+      engagementId: engagement.id,
+      sessionId: id,
+      action: 'validate_http',
+      arguments: {
+        findingId,
+        method: body.method,
+        ...(body.expectedStatus ? { expectedStatus: body.expectedStatus } : {}),
+        ...(body.bodyContains ? { bodyContains: body.bodyContains } : {}),
+      },
+      reason: body.reason,
+      scopeVersion: engagement.scope.version,
+      mode: engagement.mode,
+    });
+    res.status(201).json(publicProposal(proposal));
+  });
   app.post('/api/v1/sessions/:id/actions/:proposalId/approve', (req, res) => {
     const id = z.string().uuid().parse(req.params.id);
     const proposalId = z.string().uuid().parse(req.params.proposalId);
@@ -328,6 +389,36 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
     res.json({ summary: database.coverageSummary(id), rows: database.listCoverage(id, status) });
   });
+  app.get('/api/v1/sessions/:id/export', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const snapshot = redactExport(database.exportSession(id));
+    database.audit(id, 'session.exported_redacted', {});
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="agent-workbench-${id}.json"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.send(`${JSON.stringify(snapshot, null, 2)}\n`);
+  });
+  app.delete('/api/v1/sessions/:id', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const body = z
+      .object({ confirmTitle: z.string().min(1).max(120) })
+      .strict()
+      .parse(req.body);
+    const session = database.getSession(id);
+    if (!session) return res.status(404).json({ error: 'session not found' });
+    if (session.state === 'running')
+      return res.status(409).json({ error: 'cancel the turn first' });
+    if (body.confirmTitle !== session.title)
+      return res.status(409).json({ error: 'session title confirmation does not match' });
+    const removedArtifacts = artifacts.deleteSession(id);
+    database.deleteSession(id);
+    database.audit(undefined, 'session.deleted', {
+      sessionId: id,
+      engagementId: session.engagementId,
+      removedArtifacts,
+    });
+    return res.json({ deleted: true, removedArtifacts });
+  });
   app.get('/api/v1/artifacts/:id/preview', (req, res) => {
     const id = z.string().uuid().parse(req.params.id);
     const artifact = database.getArtifact(id);
@@ -370,7 +461,9 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
           message.includes('no longer pending') ||
           message.includes('already consumed') ||
           message.includes('expired') ||
-          message.includes('scope changed')
+          message.includes('scope changed') ||
+          message.includes('already imported') ||
+          message.includes('raw-socket scanner profile is disabled')
         ? 409
         : 500;
     return res.status(status).json({ error: status === 500 ? 'request failed' : message });
@@ -437,8 +530,19 @@ function validPort(value: number): number {
 function redactPreview(value: string): string {
   return value
     .replace(
-      /\b(?:api[_-]?key|authorization|token|password|secret)\b\s*[:=]\s*[^\s,}"']+/gi,
+      /\b(api[_-]?key|authorization|token|password|secret)\b\s*[:=]\s*[^\s,}"']+/gi,
       '$1=[REDACTED]',
     )
     .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/gi, 'Bearer [REDACTED]');
+}
+
+function redactExport(value: unknown, key = ''): unknown {
+  if (/api[_-]?key|authorization|token|password|secret|credential/i.test(key)) return '[REDACTED]';
+  if (typeof value === 'string') return redactPreview(value);
+  if (Array.isArray(value)) return value.map((entry) => redactExport(entry));
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entry]) => [entryKey, redactExport(entry, entryKey)]),
+    );
+  return value;
 }

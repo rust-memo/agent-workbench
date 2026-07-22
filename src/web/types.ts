@@ -37,13 +37,20 @@ export type ScannerLimits = ScopeDefinition['limits'];
 
 export type ActionRisk = 'medium' | 'high';
 export type ActionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'expired';
+export type WebActionName =
+  | 'katana'
+  | 'nuclei'
+  | 'ffuf'
+  | 'nmap_connect'
+  | 'nmap_raw'
+  | 'validate_http';
 
 export interface ActionProposalRecord {
   id: string;
   engagementId: string;
   sessionId: string;
   turnId?: string;
-  action: 'katana' | 'nuclei';
+  action: WebActionName;
   arguments: Record<string, unknown>;
   reason: string;
   risk: ActionRisk;

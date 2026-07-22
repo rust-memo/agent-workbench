@@ -5,7 +5,13 @@ import { clean } from '../scanners/output.js';
 import { classifyDiscoveredValue, hostInScope } from '../scope.js';
 import type { ArtifactStore } from '../storage/artifacts.js';
 import type { WebDatabase } from '../storage/database.js';
-import type { ActionProposalRecord, FindingSeverity, ScopeDefinition, WebMode } from '../types.js';
+import type {
+  ActionProposalRecord,
+  FindingSeverity,
+  ScopeDefinition,
+  WebActionName,
+  WebMode,
+} from '../types.js';
 import { actionApprovalHash } from './canonical.js';
 
 const inputArtifactSchema = z.object({ inputArtifactId: z.string().uuid() }).strict();
@@ -16,6 +22,25 @@ const severitySchema = z.enum(['info', 'low', 'medium', 'high', 'critical']);
 const nucleiArgumentsSchema = inputArtifactSchema
   .extend({ severities: z.array(severitySchema).min(1).max(5) })
   .strict();
+const ffufArgumentsSchema = inputArtifactSchema
+  .extend({
+    matchCodes: z.array(z.number().int().min(100).max(599)).min(1).max(20),
+    maxTargets: z.number().int().min(1).max(3),
+  })
+  .strict();
+const nmapArgumentsSchema = inputArtifactSchema
+  .extend({
+    ports: z.array(z.number().int().min(1).max(65535)).min(1).max(128),
+  })
+  .strict();
+const validationArgumentsSchema = z
+  .object({
+    findingId: z.string().uuid(),
+    method: z.enum(['GET', 'HEAD']),
+    expectedStatus: z.number().int().min(100).max(599).optional(),
+    bodyContains: z.string().min(1).max(200).optional(),
+  })
+  .strict();
 
 export class ActionService {
   constructor(
@@ -25,21 +50,22 @@ export class ActionService {
     private readonly runner: DockerScannerRunner,
   ) {}
 
+  rawProfileAvailable(): boolean {
+    return this.runner.rawProfileAvailable();
+  }
+
   propose(input: {
     engagementId: string;
     sessionId: string;
     turnId?: string;
-    action: 'katana' | 'nuclei';
+    action: WebActionName;
     arguments: Record<string, unknown>;
     reason: string;
     scopeVersion: number;
     mode: WebMode;
   }): ActionProposalRecord {
-    const normalizedArguments =
-      input.action === 'katana'
-        ? katanaArgumentsSchema.parse(input.arguments)
-        : nucleiArgumentsSchema.parse(input.arguments);
-    const risk = input.action === 'nuclei' ? 'high' : 'medium';
+    const normalizedArguments = normalizeArguments(input.action, input.arguments);
+    const risk = input.action === 'katana' ? 'medium' : 'high';
     const proposal = this.database.createActionProposal({
       engagementId: input.engagementId,
       sessionId: input.sessionId,
@@ -108,32 +134,20 @@ export class ActionService {
     if (!engagement || engagement.scope.version !== proposal.scopeVersion)
       throw new Error('scope changed before action execution');
     try {
-      const targets = this.authorizedTargets(proposal, engagement.scope);
-      const result =
-        proposal.action === 'katana'
-          ? await this.runner.katana(
-              targets,
-              katanaArgumentsSchema.parse(proposal.arguments),
-              engagement.scope.limits,
-              signal,
-            )
-          : await this.runner.nuclei(
-              targets,
-              nucleiArgumentsSchema.parse(proposal.arguments),
-              engagement.scope.limits,
-              signal,
-            );
+      const execution = await this.execute(proposal, engagement.scope, signal);
+      const { result, targets } = execution;
       if (result.exitCode !== 0)
         throw new Error(
           `${proposal.action} exited ${result.exitCode}: ${result.stderr.slice(0, 1000)}`,
         );
+      const artifactKind = artifactDetails(proposal.action);
       const artifact = await this.artifacts.save({
         engagementId: proposal.engagementId,
         sessionId: proposal.sessionId,
         turnId: proposal.turnId,
-        kind: proposal.action === 'katana' ? 'crawl-observations' : 'scanner-results',
-        filename: `${proposal.action}-${proposal.id}.jsonl`,
-        mediaType: 'application/x-ndjson',
+        kind: artifactKind.kind,
+        filename: `${proposal.action}-${proposal.id}.${artifactKind.extension}`,
+        mediaType: artifactKind.mediaType,
         body: `${result.stdout.trim()}${result.stdout.trim() ? '\n' : ''}`,
         metadata: {
           tool: proposal.action,
@@ -141,15 +155,14 @@ export class ActionService {
           targets: targets.length,
           scopeVersion: proposal.scopeVersion,
           scannerIsolation: 'docker',
+          scannerProfile: result.profile,
+          scannerImage: result.image,
           ...(proposal.action === 'nuclei'
             ? { templatesCommit: '7d66fa06cc0a5ad85f7bf35f18cf8ee9218fa9a5' }
             : {}),
         },
       });
-      if (proposal.action === 'katana')
-        this.recordKatanaCoverage(proposal, result.stdout, engagement.scope);
-      else
-        this.recordNucleiResults(proposal, artifact.id, targets, result.stdout, engagement.scope);
+      this.recordResults(proposal, artifact.id, targets, result.stdout, engagement.scope);
       this.database.finishActionProposal(proposal.id, 'completed', artifact.id);
       this.events.publish({
         engagementId: proposal.engagementId,
@@ -175,6 +188,185 @@ export class ActionService {
       });
       throw error;
     }
+  }
+
+  private async execute(
+    proposal: ActionProposalRecord,
+    scope: ScopeDefinition,
+    signal: AbortSignal,
+  ): Promise<{
+    result: Awaited<ReturnType<DockerScannerRunner['katana']>>;
+    targets: string[];
+  }> {
+    if (proposal.action === 'validate_http') {
+      const args = validationArgumentsSchema.parse(proposal.arguments);
+      const finding = this.database.getFinding(args.findingId);
+      if (!finding || finding.sessionId !== proposal.sessionId)
+        throw new Error('finding was not found in this session');
+      const url = safeHttpUrl(finding.url);
+      if (!url || !hostInScope(url.hostname, scope))
+        throw new Error('finding URL is no longer in scope');
+      return {
+        result: await this.runner.validateHttp(url.href, args, scope.limits, signal),
+        targets: [url.href],
+      };
+    }
+    const targets = this.authorizedTargets(proposal, scope);
+    if (proposal.action === 'katana')
+      return {
+        result: await this.runner.katana(
+          targets,
+          katanaArgumentsSchema.parse(proposal.arguments),
+          scope.limits,
+          signal,
+        ),
+        targets,
+      };
+    if (proposal.action === 'nuclei')
+      return {
+        result: await this.runner.nuclei(
+          targets,
+          nucleiArgumentsSchema.parse(proposal.arguments),
+          scope.limits,
+          signal,
+        ),
+        targets,
+      };
+    if (proposal.action === 'ffuf') {
+      const args = ffufArgumentsSchema.parse(proposal.arguments);
+      const selected = targets.slice(0, args.maxTargets);
+      const results = [];
+      for (const target of selected) {
+        if (signal.aborted) throw signal.reason;
+        results.push(await this.runner.ffuf(target, args, scope.limits, signal));
+      }
+      const failed = results.find((item) => item.exitCode !== 0);
+      return {
+        result: failed ?? {
+          stdout: results
+            .map((item) => item.stdout.trim())
+            .filter(Boolean)
+            .join('\n'),
+          stderr: results
+            .map((item) => item.stderr.trim())
+            .filter(Boolean)
+            .join('\n'),
+          exitCode: 0,
+          profile: 'safe',
+          image: results[0]?.image ?? '',
+        },
+        targets: selected,
+      };
+    }
+    const hosts = [...new Set(targets.map((target) => new URL(target).hostname))];
+    const args = nmapArgumentsSchema.parse(proposal.arguments);
+    const raw = proposal.action === 'nmap_raw';
+    return {
+      result: await this.runner.nmap(hosts, { ports: args.ports, raw }, scope.limits, signal),
+      targets: hosts,
+    };
+  }
+
+  private recordResults(
+    proposal: ActionProposalRecord,
+    artifactId: string,
+    targets: string[],
+    stdout: string,
+    scope: ScopeDefinition,
+  ): void {
+    if (proposal.action === 'katana') this.recordKatanaCoverage(proposal, stdout, scope);
+    else if (proposal.action === 'nuclei')
+      this.recordNucleiResults(proposal, artifactId, targets, stdout, scope);
+    else if (proposal.action === 'ffuf') this.recordFfufCoverage(proposal, stdout, scope);
+    else if (proposal.action === 'nmap_connect' || proposal.action === 'nmap_raw')
+      this.recordNmapCoverage(proposal, targets);
+    else this.recordValidationResult(proposal, artifactId, stdout, scope);
+  }
+
+  private recordFfufCoverage(
+    proposal: ActionProposalRecord,
+    stdout: string,
+    scope: ScopeDefinition,
+  ): void {
+    for (const row of parseJsonLines(stdout).slice(0, scope.limits.maxUrlsPerHost)) {
+      const raw = readString(row, ['url']);
+      const url = raw ? safeHttpUrl(raw) : undefined;
+      if (!url || !hostInScope(url.hostname, scope)) continue;
+      this.database.upsertCoverage({
+        engagementId: proposal.engagementId,
+        sessionId: proposal.sessionId,
+        asset: url.hostname,
+        endpoint: `GET ${url.pathname}`,
+        parameter: 'path',
+        vulnerabilityClass: 'content-discovery',
+        status: 'untested',
+        source: 'ffuf',
+        notes: `HTTP ${String(row.status ?? 'unknown')} discovered by approved bounded wordlist fuzzing.`,
+      });
+    }
+  }
+
+  private recordNmapCoverage(proposal: ActionProposalRecord, targets: string[]): void {
+    const args = nmapArgumentsSchema.parse(proposal.arguments);
+    for (const host of targets) {
+      this.database.upsertCoverage({
+        engagementId: proposal.engagementId,
+        sessionId: proposal.sessionId,
+        asset: host,
+        endpoint: `TCP ${args.ports.join(',')}`,
+        parameter: '*',
+        vulnerabilityClass:
+          proposal.action === 'nmap_raw' ? 'syn-port-discovery' : 'connect-port-discovery',
+        status: 'tried',
+        source: proposal.action,
+        notes: `Approved ${proposal.action === 'nmap_raw' ? 'raw SYN' : 'TCP connect'} profile completed.`,
+      });
+    }
+  }
+
+  private recordValidationResult(
+    proposal: ActionProposalRecord,
+    artifactId: string,
+    stdout: string,
+    scope: ScopeDefinition,
+  ): void {
+    const args = validationArgumentsSchema.parse(proposal.arguments);
+    const finding = this.database.getFinding(args.findingId);
+    if (!finding) throw new Error('finding disappeared during validation');
+    const status = Number.parseInt(stdout.match(/^HTTP\/\S+\s+(\d{3})/m)?.[1] ?? '0', 10);
+    const statusMatches = args.expectedStatus === undefined || status === args.expectedStatus;
+    const bodyMatches = args.bodyContains === undefined || stdout.includes(args.bodyContains);
+    const reproduced = statusMatches && bodyMatches;
+    const url = new URL(finding.url);
+    if (hostInScope(url.hostname, scope)) {
+      this.database.upsertCoverage({
+        engagementId: proposal.engagementId,
+        sessionId: proposal.sessionId,
+        asset: url.hostname,
+        endpoint: `${args.method} ${url.pathname}`,
+        parameter: '*',
+        vulnerabilityClass: `validation:${finding.scannerReference}`,
+        status: reproduced ? 'passed' : 'failed',
+        source: 'validate_http',
+        notes: `HTTP ${status || 'unknown'}; status assertion ${statusMatches ? 'matched' : 'failed'}; body assertion ${bodyMatches ? 'matched' : 'failed'}. Manual confirmation is still required.`,
+      });
+    }
+    this.events.publish({
+      engagementId: proposal.engagementId,
+      sessionId: proposal.sessionId,
+      turnId: proposal.turnId,
+      type: 'validation.checked',
+      payload: {
+        proposalId: proposal.id,
+        findingId: finding.id,
+        artifactId,
+        reproduced,
+        httpStatus: status || undefined,
+        statusMatches,
+        bodyMatches,
+        requiresManualConfirmation: true,
+      },
+    });
   }
 
   private authorizedTargets(proposal: ActionProposalRecord, scope: ScopeDefinition): string[] {
@@ -283,6 +475,46 @@ export class ActionService {
 
 export function publicProposal(proposal: ActionProposalRecord): ActionProposalRecord {
   return { ...proposal, approvedBy: undefined };
+}
+
+function normalizeArguments(
+  action: WebActionName,
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  switch (action) {
+    case 'katana':
+      return katanaArgumentsSchema.parse(value);
+    case 'nuclei':
+      return nucleiArgumentsSchema.parse(value);
+    case 'ffuf':
+      return ffufArgumentsSchema.parse(value);
+    case 'nmap_connect':
+    case 'nmap_raw': {
+      const parsed = nmapArgumentsSchema.parse(value);
+      return { ...parsed, ports: [...new Set(parsed.ports)].sort((a, b) => a - b) };
+    }
+    case 'validate_http':
+      return validationArgumentsSchema.parse(value);
+  }
+}
+
+function artifactDetails(action: WebActionName): {
+  kind: string;
+  extension: string;
+  mediaType: string;
+} {
+  switch (action) {
+    case 'katana':
+      return { kind: 'crawl-observations', extension: 'jsonl', mediaType: 'application/x-ndjson' };
+    case 'nuclei':
+    case 'ffuf':
+      return { kind: 'scanner-results', extension: 'jsonl', mediaType: 'application/x-ndjson' };
+    case 'nmap_connect':
+    case 'nmap_raw':
+      return { kind: 'port-scan-results', extension: 'xml', mediaType: 'application/xml' };
+    case 'validate_http':
+      return { kind: 'validation-evidence', extension: 'http', mediaType: 'text/plain' };
+  }
 }
 
 function parseArtifactValues(body: string, mediaType: string): unknown[] {
