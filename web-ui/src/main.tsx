@@ -27,6 +27,16 @@ import {
 } from './api';
 import './styles.css';
 
+const SIDEBAR_COLLAPSED_KEY = 'agent-workbench:sessions-sidebar-collapsed';
+
+function initialSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
 function App(): React.ReactElement {
   const [auth, setAuth] = useState<'loading' | 'ready' | 'missing'>('loading');
   const [engagements, setEngagements] = useState<Engagement[]>([]);
@@ -51,9 +61,18 @@ function App(): React.ReactElement {
   const [error, setError] = useState('');
   const [clearedThrough, setClearedThrough] = useState<Record<string, number>>({});
   const [sidebarWidth, setSidebarWidth] = useState(250);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [inspectorWidth, setInspectorWidth] = useState(330);
   const [terminalCompact, setTerminalCompact] = useState(false);
   const lastSeq = useRef(0);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+    } catch {
+      // The layout still works when browser storage is unavailable.
+    }
+  }, [sidebarCollapsed]);
 
   const refreshSessionData = useCallback(async (sessionId: string) => {
     const [files, actions, nextFindings, nextCoverage, runs] = await Promise.all([
@@ -475,10 +494,11 @@ function App(): React.ReactElement {
 
   return (
     <div
-      className={`shell ${terminalCompact ? 'terminal-compact' : ''}`}
+      className={`shell ${terminalCompact ? 'terminal-compact' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}
       style={
         {
-          '--sidebar-width': `${sidebarWidth}px`,
+          '--sidebar-width': sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
+          '--left-splitter-width': sidebarCollapsed ? '0px' : '6px',
           '--inspector-width': `${inspectorWidth}px`,
         } as CSSProperties
       }
@@ -491,6 +511,17 @@ function App(): React.ReactElement {
             <small>Local AI Security Workbench · v0.5.0</small>
           </div>
         </div>
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="sidebar-reveal"
+            aria-label="Show sessions panel"
+            aria-expanded="false"
+            onClick={() => setSidebarCollapsed(false)}
+          >
+            ☰ Sessions
+          </button>
+        )}
         <div className="provider-switcher">
           <label>
             <span>Provider</span>
@@ -560,86 +591,102 @@ function App(): React.ReactElement {
         </div>
       </header>
 
-      <aside className="sidebar">
-        <div className="section-title">
-          <span>Sessions</span>
-          <button
-            type="button"
-            onClick={() =>
-              void createWorkspace(
-                refresh,
-                setSelected,
-                setError,
-                providerDraft,
-                modelDraft || 'default',
-              )
-            }
-          >
-            ＋
-          </button>
-        </div>
-        <div className="session-list">
-          {sessions.map((session) => (
-            <button
-              type="button"
-              key={session.id}
-              className={`session-card ${selected === session.id ? 'active' : ''}`}
-              onClick={() => setSelected(session.id)}
-            >
-              <span className={`state-dot ${session.state}`} />
-              <span>
-                <strong>{session.title}</strong>
-                <small>
-                  {session.provider} / {session.model} · {session.state}
-                </small>
-              </span>
-            </button>
-          ))}
-          {sessions.length === 0 && (
-            <div className="empty">Create your first scoped engagement.</div>
-          )}
-        </div>
-        {activeEngagement && (
-          <div className="scope-card">
-            <small>SCOPE v{1}</small>
-            <strong>{activeEngagement.name}</strong>
-            {activeEngagement.scope.allowedHosts.map((host) => (
-              <code key={host}>{host}</code>
-            ))}
-            <p>Discovery may be recorded outside scope. Active actions stay restricted.</p>
+      {!sidebarCollapsed && (
+        <aside className="sidebar">
+          <div className="section-title">
+            <span>Sessions</span>
+            <span className="section-actions">
+              <button
+                type="button"
+                aria-label="Hide sessions panel"
+                title="Hide sessions panel"
+                onClick={() => setSidebarCollapsed(true)}
+              >
+                ‹
+              </button>
+              <button
+                type="button"
+                aria-label="Create workspace"
+                title="Create workspace"
+                onClick={() =>
+                  void createWorkspace(
+                    refresh,
+                    setSelected,
+                    setError,
+                    providerDraft,
+                    modelDraft || 'default',
+                  )
+                }
+              >
+                ＋
+              </button>
+            </span>
           </div>
-        )}
-        <div className="section-title inspector-gap">
-          <span>Legacy JSON</span>
-          <span className="count">{legacySessions.filter((item) => !item.imported).length}</span>
-        </div>
-        <div className="legacy-list">
-          {legacySessions.slice(0, 5).map((legacy) => (
-            <article className="legacy-card" key={legacy.id}>
-              <strong>{legacy.fileName}</strong>
-              <small>{legacy.preview}</small>
-              {legacy.imported ? (
-                <span>Imported</span>
-              ) : (
-                <button type="button" onClick={() => void importLegacy(legacy)}>
-                  Import once
-                </button>
-              )}
-            </article>
-          ))}
-          {legacySessions.length === 0 && (
-            <div className="empty compact">No CLI JSON sessions.</div>
+          <div className="session-list">
+            {sessions.map((session) => (
+              <button
+                type="button"
+                key={session.id}
+                className={`session-card ${selected === session.id ? 'active' : ''}`}
+                onClick={() => setSelected(session.id)}
+              >
+                <span className={`state-dot ${session.state}`} />
+                <span>
+                  <strong>{session.title}</strong>
+                  <small>
+                    {session.provider} / {session.model} · {session.state}
+                  </small>
+                </span>
+              </button>
+            ))}
+            {sessions.length === 0 && (
+              <div className="empty">Create your first scoped engagement.</div>
+            )}
+          </div>
+          {activeEngagement && (
+            <div className="scope-card">
+              <small>SCOPE v{1}</small>
+              <strong>{activeEngagement.name}</strong>
+              {activeEngagement.scope.allowedHosts.map((host) => (
+                <code key={host}>{host}</code>
+              ))}
+              <p>Discovery may be recorded outside scope. Active actions stay restricted.</p>
+            </div>
           )}
-        </div>
-      </aside>
+          <div className="section-title inspector-gap">
+            <span>Legacy JSON</span>
+            <span className="count">{legacySessions.filter((item) => !item.imported).length}</span>
+          </div>
+          <div className="legacy-list">
+            {legacySessions.slice(0, 5).map((legacy) => (
+              <article className="legacy-card" key={legacy.id}>
+                <strong>{legacy.fileName}</strong>
+                <small>{legacy.preview}</small>
+                {legacy.imported ? (
+                  <span>Imported</span>
+                ) : (
+                  <button type="button" onClick={() => void importLegacy(legacy)}>
+                    Import once
+                  </button>
+                )}
+              </article>
+            ))}
+            {legacySessions.length === 0 && (
+              <div className="empty compact">No CLI JSON sessions.</div>
+            )}
+          </div>
+        </aside>
+      )}
 
-      <div
-        className="splitter splitter-left"
-        role="separator"
-        tabIndex={0}
-        aria-label="Resize sessions panel"
-        onPointerDown={(event) => startResize('left', event)}
-      />
+      {!sidebarCollapsed && (
+        <div
+          className="splitter splitter-left"
+          role="separator"
+          tabIndex={0}
+          aria-label="Resize sessions panel"
+          onPointerDown={(event) => startResize('left', event)}
+        />
+      )}
 
       <main className="terminal-panel recon-layout">
         <div className="panel-head">
