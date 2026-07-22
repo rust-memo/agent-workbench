@@ -7,10 +7,19 @@ import type { Client } from '../../llm/client.js';
 import { OllamaClient } from '../../llm/ollama.js';
 import { clean } from '../scanners/localRunner.js';
 import type { ProviderCapabilities, WebProviderId } from '../types.js';
-import { OpenClaudeCliClient, OpenCodeCliClient, QwenCliClient } from './cli.js';
+import {
+  ClaudeCliClient,
+  type CloudPayloadHandler,
+  CodexCliClient,
+  OpenClaudeCliClient,
+  OpenCodeCliClient,
+  QwenCliClient,
+} from './cli.js';
 
 export class WebProviderManager {
   readonly qwenPath = process.env.PENTESTERFLOW_QWEN_PATH ?? siblingCliPath('qwen');
+  readonly codexPath = process.env.PENTESTERFLOW_CODEX_PATH ?? siblingCliPath('codex');
+  readonly claudePath = process.env.PENTESTERFLOW_CLAUDE_PATH ?? preferredClaudePath();
   readonly openCodePath =
     process.env.PENTESTERFLOW_OPENCODE_PATH ?? join(homedir(), '.opencode', 'bin', 'opencode');
   readonly openClaudePath =
@@ -19,20 +28,93 @@ export class WebProviderManager {
 
   constructor(readonly ollamaBaseURL: string) {}
 
-  create(provider: WebProviderId, model: string): Client {
+  create(provider: WebProviderId, model: string, onPayload?: CloudPayloadHandler): Client {
     if (provider === 'ollama') return new OllamaClient(this.ollamaBaseURL, model);
-    if (provider === 'qwen') return new QwenCliClient(this.qwenPath, model);
-    if (provider === 'opencode') return new OpenCodeCliClient(this.openCodePath, model);
-    return new OpenClaudeCliClient(this.openClaudePath, model);
+    if (provider === 'qwen') return new QwenCliClient(this.qwenPath, model, onPayload);
+    if (provider === 'codex') return new CodexCliClient(this.codexPath, model, onPayload);
+    if (provider === 'claude') return new ClaudeCliClient(this.claudePath, model, onPayload);
+    if (provider === 'opencode') return new OpenCodeCliClient(this.openCodePath, model, onPayload);
+    return new OpenClaudeCliClient(this.openClaudePath, model, onPayload);
   }
 
   async capabilities(): Promise<ProviderCapabilities[]> {
     return Promise.all([
       this.ollamaCapabilities(),
       this.qwenCapabilities(),
+      this.codexCapabilities(),
+      this.claudeCapabilities(),
       this.openCodeCapabilities(),
       this.openClaudeCapabilities(),
     ]);
+  }
+
+  private async codexCapabilities(): Promise<ProviderCapabilities> {
+    const probe = await command(this.codexPath, ['--version']);
+    let models = ['default'];
+    let discoveryError: string | undefined;
+    if (probe.ready) {
+      try {
+        const configPath =
+          process.env.PENTESTERFLOW_CODEX_CONFIG ?? join(homedir(), '.codex', 'config.toml');
+        const cachePath =
+          process.env.PENTESTERFLOW_CODEX_MODEL_CACHE ??
+          join(homedir(), '.codex', 'models_cache.json');
+        const [config, cache] = await Promise.all([
+          readFile(configPath, 'utf8').catch(() => ''),
+          readJson(cachePath).catch(() => undefined),
+        ]);
+        models = modelsFromCodexConfig(config, cache);
+        if (models.length === 0) models = ['default'];
+      } catch (error) {
+        discoveryError = `model discovery: ${errorText(error)}`;
+      }
+    }
+    return capability('codex', 'Codex CLI', probe.ready, probe.version, models, {
+      error: probe.error ?? discoveryError,
+      streaming: true,
+      sandbox: true,
+      modelDiscovery: models[0] !== 'default',
+      externalContextWarning: true,
+    });
+  }
+
+  private async claudeCapabilities(): Promise<ProviderCapabilities> {
+    const probe = await command(this.claudePath, ['--version']);
+    let models = ['default', 'sonnet', 'opus', 'haiku'];
+    let discoveryError: string | undefined;
+    if (probe.ready) {
+      try {
+        if (/openclaude(?:\.cmd)?$/i.test(this.claudePath)) {
+          const settingsPath =
+            process.env.PENTESTERFLOW_OPENCLAUDE_SETTINGS ??
+            join(homedir(), '.openclaude', 'settings.json');
+          const cachePath =
+            process.env.PENTESTERFLOW_OPENCLAUDE_MODEL_CACHE ??
+            join(homedir(), '.openclaude', 'model-discovery-cache.json');
+          const [settings, cache] = await Promise.all([
+            readJson(settingsPath),
+            readJson(cachePath).catch(() => undefined),
+          ]);
+          models = uniqueModels(['default', ...modelsFromOpenClaudeConfig(settings, cache)]);
+        } else {
+          const settingsPath =
+            process.env.PENTESTERFLOW_CLAUDE_SETTINGS ??
+            join(homedir(), '.claude', 'settings.json');
+          const settings = await readJson(settingsPath).catch(() => undefined);
+          const configured = modelsFromClaudeConfig(settings);
+          models = uniqueModels(['default', ...configured, 'sonnet', 'opus', 'haiku']);
+        }
+      } catch (error) {
+        discoveryError = `model discovery: ${errorText(error)}`;
+      }
+    }
+    return capability('claude', 'Claude CLI', probe.ready, probe.version, models, {
+      error: probe.error ?? discoveryError,
+      streaming: false,
+      sandbox: true,
+      modelDiscovery: models.length > 1,
+      externalContextWarning: true,
+    });
   }
 
   private async ollamaCapabilities(): Promise<ProviderCapabilities> {
@@ -165,7 +247,7 @@ function capability(
     structuredOutput: true,
     planMode: true,
     sandbox: extra.sandbox,
-    toolDisable: provider === 'opencode' || provider === 'openclaude',
+    toolDisable: provider !== 'ollama' && provider !== 'codex',
     modelDiscovery: extra.modelDiscovery,
     externalContextWarning: extra.externalContextWarning,
     checkedAt: new Date().toISOString(),
@@ -222,6 +304,31 @@ export function modelsFromOpenClaudeConfig(settings: unknown, cache?: unknown): 
   return [...models];
 }
 
+export function modelsFromCodexConfig(config: string, cache?: unknown): string[] {
+  const models = new Set<string>();
+  const active = config.match(/^\s*model\s*=\s*["']([^"']+)["']/m)?.[1];
+  if (active && isSafeModelId(active)) models.add(active);
+  if (isRecord(cache) && Array.isArray(cache.models)) {
+    for (const item of cache.models) {
+      if (!isRecord(item) || item.visibility === 'hide') continue;
+      const slug = item.slug;
+      if (typeof slug === 'string' && isSafeModelId(slug)) models.add(slug);
+    }
+  }
+  return [...models];
+}
+
+export function modelsFromClaudeConfig(settings: unknown): string[] {
+  if (!isRecord(settings)) return [];
+  const candidates = [settings.model];
+  if (isRecord(settings.env)) candidates.push(settings.env.ANTHROPIC_MODEL);
+  return uniqueModels(candidates.filter((value): value is string => typeof value === 'string'));
+}
+
+function uniqueModels(models: string[]): string[] {
+  return [...new Set(models.filter(isSafeModelId))];
+}
+
 function isSafeModelId(value: string): boolean {
   return value.length > 0 && value.length <= 160 && /^[a-zA-Z0-9][a-zA-Z0-9._:@/+\-]*$/.test(value);
 }
@@ -271,6 +378,15 @@ export function siblingCliPath(name: string): string {
   const filename = process.platform === 'win32' ? `${name}.cmd` : name;
   const candidate = join(dirname(process.execPath), filename);
   return existsSync(candidate) ? candidate : name;
+}
+
+export function preferredClaudePath(): string {
+  const official = siblingCliPath('claude');
+  if (official.includes('/') || existsSync(official)) return official;
+  const openClaude = siblingCliPath('openclaude');
+  if (openClaude.includes('/') || existsSync(openClaude)) return openClaude;
+  const legacy = join(homedir(), '.nvm', 'versions', 'node', 'v22.23.1', 'bin', 'openclaude');
+  return existsSync(legacy) ? legacy : official;
 }
 
 async function readJson(path: string): Promise<unknown> {

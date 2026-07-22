@@ -7,6 +7,7 @@ import { Registry as ToolRegistry } from '../tools/registry.js';
 import type { ActionService } from './actions/service.js';
 import { parseWebCommand, webCommandHelp } from './commands.js';
 import type { EventHub } from './events.js';
+import type { CloudPayloadPreview } from './providers/cli.js';
 import type { WebProviderManager } from './providers/manager.js';
 import type { DockerScannerRunner } from './scanners/dockerRunner.js';
 import { clean } from './scanners/output.js';
@@ -521,9 +522,45 @@ export class WebRuntimeManager {
     if (!current) throw new Error('session not found');
     const live = this.live.get(sessionId);
     if (live?.controller) throw new Error('cannot switch provider while a turn is running');
-    const client = this.providers.create(provider, model);
-    live?.agent.setClient(client);
+    if (live) live.agent.setClient(this.createProviderClient(sessionId, live, provider, model));
     return this.database.updateSessionProvider(sessionId, provider, model);
+  }
+
+  private createProviderClient(
+    sessionId: string,
+    runtime: Pick<LiveSession, 'engagement' | 'currentTurnId'>,
+    provider: import('./types.js').WebProviderId,
+    model: string,
+  ) {
+    return this.providers.create(provider, model, (preview) =>
+      this.publishCloudPreview(sessionId, runtime, preview),
+    );
+  }
+
+  private publishCloudPreview(
+    sessionId: string,
+    runtime: Pick<LiveSession, 'engagement' | 'currentTurnId'>,
+    preview: CloudPayloadPreview,
+  ): void {
+    const metadata = {
+      provider: preview.provider,
+      model: preview.model,
+      bytes: preview.bytes,
+      sha256: preview.sha256,
+      redactionCount: preview.redactionCount,
+      truncated: preview.truncated,
+    };
+    this.database.audit(sessionId, 'provider.cloud_payload_dispatched', {
+      turnId: runtime.currentTurnId,
+      ...metadata,
+    });
+    this.events.publish({
+      engagementId: runtime.engagement.id,
+      sessionId,
+      turnId: runtime.currentTurnId,
+      type: 'provider.cloud-preview',
+      payload: { ...metadata, preview: preview.preview },
+    });
   }
 
   private getOrCreate(sessionId: string): LiveSession {
@@ -544,11 +581,22 @@ export class WebRuntimeManager {
     const first = engagement.scope.allowedHosts[0]?.replace(/^\*\./, '');
     if (first) target.setBaseURL(`https://${first}`);
     const store = new SqliteSessionStore(sessionId, this.database.db);
+    const previewContext = {
+      engagement,
+      get currentTurnId() {
+        return holder.currentTurnId;
+      },
+    };
     const runtime: LiveSession = {
       engagement,
       currentTurnId: undefined,
       agent: new Agent({
-        client: this.providers.create(session.provider, session.model),
+        client: this.createProviderClient(
+          sessionId,
+          previewContext,
+          session.provider,
+          session.model,
+        ),
         tools: createWebToolRegistry(
           context,
           this.runner,

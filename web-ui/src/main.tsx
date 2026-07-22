@@ -193,21 +193,12 @@ function App(): React.ReactElement {
 
   const switchProvider = async (): Promise<void> => {
     if (!activeSession) return;
-    const external = providerDraft !== 'ollama';
-    if (
-      external &&
-      !window.confirm(
-        `${draftCapability?.label ?? providerDraft} may send the redacted session context to its configured remote model. Continue?`,
-      )
-    )
-      return;
     try {
       await api(`/sessions/${activeSession.id}/provider`, {
         method: 'PATCH',
         body: JSON.stringify({
           provider: providerDraft,
           model: modelDraft || 'default',
-          externalContextApproved: external,
         }),
       });
       await refresh();
@@ -221,25 +212,13 @@ function App(): React.ReactElement {
     if (!selected || !message.trim()) return;
     const submitted = message.trim();
     if (submitted.startsWith('/')) {
-      const usesProvider = /^\/(plan|next|compact)(?:\s|$)/i.test(submitted);
-      if (
-        usesProvider &&
-        activeSession?.provider !== 'ollama' &&
-        !window.confirm(
-          `${activeCapability?.label ?? activeSession?.provider} may send this command's redacted session context to its configured remote model. Approve?`,
-        )
-      )
-        return;
       try {
         if (/^\/clear(?:\s|$)/i.test(submitted)) {
           setClearedThrough((current) => ({ ...current, [selected]: lastSeq.current }));
         }
         await api(`/sessions/${selected}/commands`, {
           method: 'POST',
-          body: JSON.stringify({
-            command: submitted,
-            externalContextApproved: usesProvider && activeSession?.provider !== 'ollama',
-          }),
+          body: JSON.stringify({ command: submitted }),
         });
         setMessage('');
         await refresh();
@@ -248,18 +227,10 @@ function App(): React.ReactElement {
       }
       return;
     }
-    const external = activeSession?.provider !== 'ollama';
-    if (
-      external &&
-      !window.confirm(
-        `${activeCapability?.label ?? activeSession?.provider} may send this turn's session context to its configured remote model. Approve this turn?`,
-      )
-    )
-      return;
     try {
       await api(`/sessions/${selected}/turns`, {
         method: 'POST',
-        body: JSON.stringify({ message, externalContextApproved: external }),
+        body: JSON.stringify({ message }),
       });
       setMessage('');
       await refresh();
@@ -353,7 +324,7 @@ function App(): React.ReactElement {
           <span className="brand-mark">AW</span>
           <div>
             <strong>Agent Workbench</strong>
-            <small>Local AI Security Workbench · v0.3.1</small>
+            <small>Local AI Security Workbench · v0.3.2</small>
           </div>
         </div>
         <div className="provider-switcher">
@@ -430,7 +401,15 @@ function App(): React.ReactElement {
           <span>Sessions</span>
           <button
             type="button"
-            onClick={() => void createWorkspace(refresh, setSelected, setError)}
+            onClick={() =>
+              void createWorkspace(
+                refresh,
+                setSelected,
+                setError,
+                providerDraft,
+                modelDraft || 'default',
+              )
+            }
           >
             ＋
           </button>
@@ -485,6 +464,7 @@ function App(): React.ReactElement {
             </button>
           )}
         </div>
+        <ProgressDock events={visibleEvents} state={activeSession?.state ?? 'idle'} />
         <div className="terminal" role="log" aria-live="polite">
           {visibleEvents.length === 0 && (
             <div className="terminal-empty">
@@ -656,15 +636,17 @@ function App(): React.ReactElement {
 function EventLine({ event }: { event: RuntimeEvent }): React.ReactElement {
   const payload = event.payload;
   const text =
-    typeof payload.text === 'string'
-      ? payload.text
-      : typeof payload.result === 'string'
-        ? payload.result
-        : typeof payload.error === 'string'
-          ? payload.error
-          : event.type === 'turn.started' && typeof payload.message === 'string'
-            ? payload.message
-            : JSON.stringify(payload);
+    event.type === 'provider.cloud-preview'
+      ? `Redacted payload dispatched · ${String(payload.provider)} / ${String(payload.model)} · ${formatBytes(Number(payload.bytes) || 0)} · ${Number(payload.redactionCount) || 0} redactions · sha256 ${String(payload.sha256).slice(0, 16)}…`
+      : typeof payload.text === 'string'
+        ? payload.text
+        : typeof payload.result === 'string'
+          ? payload.result
+          : typeof payload.error === 'string'
+            ? payload.error
+            : event.type === 'turn.started' && typeof payload.message === 'string'
+              ? payload.message
+              : JSON.stringify(payload);
   const kind =
     event.type.includes('error') || payload.level === 'error'
       ? 'error'
@@ -684,6 +666,80 @@ function EventLine({ event }: { event: RuntimeEvent }): React.ReactElement {
       <pre>{text}</pre>
     </div>
   );
+}
+
+function ProgressDock({
+  events,
+  state,
+}: {
+  events: RuntimeEvent[];
+  state: Session['state'];
+}): React.ReactElement {
+  const latest = events.at(-1);
+  const cloud = [...events].reverse().find((event) => event.type === 'provider.cloud-preview');
+  const progress = operationProgress(latest, state);
+  return (
+    <section className={`progress-dock ${progress.tone}`} aria-label="Current operation progress">
+      <div className="progress-summary">
+        <div>
+          <span className="eyebrow">OPERATION</span>
+          <strong>{progress.label}</strong>
+        </div>
+        <span>{progress.percent}%</span>
+      </div>
+      <div className="progress-track" aria-hidden="true">
+        <i style={{ width: `${progress.percent}%` }} />
+      </div>
+      <div className="progress-stages">
+        {['Queued', 'Redacted', 'Running', 'Saving', 'Done'].map((stage, index) => (
+          <span key={stage} className={progress.percent >= index * 25 ? 'active' : ''}>
+            {stage}
+          </span>
+        ))}
+      </div>
+      {cloud && (
+        <details className="cloud-preview">
+          <summary>
+            Cloud preview · {String(cloud.payload.provider)} / {String(cloud.payload.model)} ·{' '}
+            {formatBytes(Number(cloud.payload.bytes) || 0)} ·{' '}
+            {Number(cloud.payload.redactionCount) || 0} redactions
+          </summary>
+          <div className="preview-meta">
+            SHA-256 <code>{String(cloud.payload.sha256)}</code>
+          </div>
+          <pre>{String(cloud.payload.preview ?? '')}</pre>
+        </details>
+      )}
+    </section>
+  );
+}
+
+function operationProgress(
+  latest: RuntimeEvent | undefined,
+  state: Session['state'],
+): { label: string; percent: number; tone: string } {
+  if (!latest) return { label: 'Ready for a turn', percent: 0, tone: 'idle' };
+  if (state === 'cancelled' || latest.type.includes('cancelled'))
+    return { label: 'Operation cancelled', percent: 100, tone: 'cancelled' };
+  if (state === 'error' || latest.type.includes('error') || latest.type === 'action.failed')
+    return { label: 'Operation stopped with an error', percent: 100, tone: 'error' };
+  if (latest.type === 'turn.finished' || latest.type === 'action.completed')
+    return { label: 'Operation complete', percent: 100, tone: 'done' };
+  if (latest.type.includes('cancel-requested'))
+    return { label: 'Stopping the current operation…', percent: 75, tone: 'running' };
+  if (latest.type === 'provider.cloud-preview')
+    return { label: 'Redacted payload dispatched to the model', percent: 35, tone: 'running' };
+  if (latest.type === 'artifact.saved')
+    return { label: 'Saving verified artifact metadata', percent: 85, tone: 'running' };
+  if (latest.type.includes('tool-result') || latest.type.includes('assistant'))
+    return { label: 'Processing model response', percent: 65, tone: 'running' };
+  if (latest.type === 'action.started')
+    return { label: 'Isolated scanner is running', percent: 40, tone: 'running' };
+  if (latest.type === 'turn.started')
+    return { label: 'Preparing redacted model context', percent: 15, tone: 'running' };
+  return state === 'running'
+    ? { label: 'Operation in progress', percent: 50, tone: 'running' }
+    : { label: 'Ready for a turn', percent: 0, tone: 'idle' };
 }
 
 function ArtifactCard({ artifact }: { artifact: Artifact }): React.ReactElement {
@@ -748,6 +804,8 @@ async function createWorkspace(
   refresh: () => Promise<void>,
   select: (id: string) => void,
   fail: (message: string) => void,
+  provider: Session['provider'],
+  model: string,
 ): Promise<void> {
   const host = window.prompt('Authorized host (example.com or *.example.com)');
   if (!host) return;
@@ -780,8 +838,8 @@ async function createWorkspace(
       body: JSON.stringify({
         engagementId: engagement.id,
         title: `${name} / ${mode === 'PLAN' ? 'Plan' : 'Recon'}`,
-        provider: 'qwen',
-        model: 'default',
+        provider,
+        model,
       }),
     });
     await refresh();

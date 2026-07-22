@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { modelsFromOpenClaudeConfig, modelsFromQwenSettings, siblingCliPath } from './manager.js';
+import {
+  modelsFromClaudeConfig,
+  modelsFromCodexConfig,
+  modelsFromOpenClaudeConfig,
+  modelsFromQwenSettings,
+  siblingCliPath,
+} from './manager.js';
 
 describe('Qwen model discovery', () => {
   it('finds the Qwen shim beside the active Node runtime when it is installed there', () => {
@@ -30,6 +36,31 @@ describe('Qwen model discovery', () => {
         modelProviders: { openai: [{ id: '--help' }, { id: 'bad model' }, { id: 42 }] },
       }),
     ).toEqual([]);
+  });
+});
+
+describe('Codex model discovery', () => {
+  it('prioritizes the active model and adds visible cached models', () => {
+    expect(
+      modelsFromCodexConfig('model = "gpt-active"', {
+        models: [
+          { slug: 'gpt-active', visibility: 'list' },
+          { slug: 'gpt-other', visibility: 'list' },
+          { slug: 'gpt-hidden', visibility: 'hide' },
+        ],
+      }),
+    ).toEqual(['gpt-active', 'gpt-other']);
+  });
+});
+
+describe('Claude model discovery', () => {
+  it('accepts safe configured model names', () => {
+    expect(
+      modelsFromClaudeConfig({
+        model: 'claude-sonnet-4',
+        env: { ANTHROPIC_MODEL: 'vendor/model' },
+      }),
+    ).toEqual(['claude-sonnet-4', 'vendor/model']);
   });
 });
 

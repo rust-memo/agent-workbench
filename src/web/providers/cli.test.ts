@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatRequest } from '../../llm/types.js';
-import { parseOpenClaudeOutput, parseStructuredEnvelope } from './cli.js';
+import {
+  parseCodexJsonl,
+  parseOpenClaudeOutput,
+  parseStructuredEnvelope,
+  prepareCloudPayload,
+} from './cli.js';
 
 const request: ChatRequest = {
   model: 'test',
@@ -41,6 +46,45 @@ describe('CLI provider structured output', () => {
         request,
       ),
     ).toBeUndefined();
+  });
+});
+
+describe('cloud payload boundary', () => {
+  it('redacts credentials before hashing, previewing, and sending the exact prompt', () => {
+    const prepared = prepareCloudPayload({
+      ...request,
+      messages: [
+        {
+          role: 'user',
+          content: 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456',
+        },
+      ],
+    });
+    expect(prepared.prompt).not.toContain('abcdefghijklmnopqrstuvwxyz123456');
+    expect(prepared.preview).toBe(prepared.prompt);
+    expect(prepared.redactionCount).toBe(1);
+    expect(prepared.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(prepared.bytes).toBe(Buffer.byteLength(prepared.prompt));
+  });
+});
+
+describe('Codex JSONL output', () => {
+  it('collects only completed agent messages', () => {
+    expect(
+      parseCodexJsonl(
+        [
+          JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),
+          JSON.stringify({
+            type: 'item.completed',
+            item: { type: 'agent_message', text: '{"assistantText":"ok","toolCalls":[]}' },
+          }),
+        ].join('\n'),
+      ),
+    ).toBe('{"assistantText":"ok","toolCalls":[]}');
+  });
+
+  it('fails closed on malformed JSON event output', () => {
+    expect(() => parseCodexJsonl('{broken')).toThrow('malformed JSON');
   });
 });
 

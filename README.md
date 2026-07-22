@@ -16,7 +16,7 @@ control.
 [![license: Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![stars](https://img.shields.io/github/stars/rust-memo/agent-workbench?style=social)](https://github.com/rust-memo/agent-workbench/stargazers)
 
-**[Install](#install) · [Web Workbench](#local-web-workbench-v031) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
+**[Install](#install) · [Web Workbench](#local-web-workbench-v032) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
 
 </div>
 
@@ -112,7 +112,7 @@ irm https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.ps1
 Pin a release or choose an install directory:
 
 ```sh
-PENTESTERFLOW_VERSION=v0.3.1 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
+PENTESTERFLOW_VERSION=v0.3.2 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh)"
 ```
 
@@ -153,7 +153,7 @@ pentesterflow --resume <session-id>
 On resume, PentesterFlow automatically shows a recap of the previous session's
 persistent memory so you can continue without manually reconstructing context.
 
-## Local Web Workbench (v0.3.1)
+## Local Web Workbench (v0.3.2)
 
 The Web workbench keeps the existing CLI intact and adds an English-only,
 terminal-style local interface. Web sessions use SQLite as their only source of
@@ -164,7 +164,7 @@ Requirements for the Web server:
 
 - Node.js 22 or newer (the CLI remains compatible with Node.js 20).
 - Docker Engine with permission for the local user to create containers.
-- At least one provider: Ollama, Qwen Code, OpenCode, or OpenClaude.
+- At least one provider: Ollama, Qwen Code, Codex CLI, Claude CLI, OpenCode, or OpenClaude.
 
 ```sh
 npm install
@@ -183,11 +183,11 @@ Open the single-use pairing URL printed in the terminal. The fragment is
 exchanged for an HttpOnly, SameSite=Strict session cookie and is removed from
 the browser address bar immediately.
 
-v0.3.1 includes general assistance, Plan and low-impact Recon modes, an
-Ollama/Qwen Code/OpenCode/OpenClaude provider and checked-model switcher,
+v0.3.2 includes general assistance, Plan and low-impact Recon modes, an
+Ollama/Qwen Code/Codex CLI/Claude CLI/OpenCode/OpenClaude provider and checked-model switcher,
 Subfinder, DNSX, HTTPX, Katana, Nuclei, SQLite event replay, cancellation,
 hash-addressed artifacts, approval proposals, Findings, and Coverage. All five
-scanners run in an ephemeral `agent-workbench-scanner-safe:0.3.1` container.
+scanners run in an ephemeral `agent-workbench-scanner-safe:0.3.2` container.
 The server owns the image, entrypoint, flags, network mode, resource limits,
 user, and capabilities; targets are sent through stdin. Scanner containers are
 read-only, non-root, capability-free, `no-new-privileges`, resource-limited,
@@ -237,14 +237,23 @@ npm run start:web
 ```
 
 Qwen Code is launched with `--safe-mode`, sandboxing, structured JSON output,
-and an empty temporary working directory. OpenCode is loaded from
+and an empty temporary working directory. Codex uses non-interactive,
+ephemeral, read-only execution. Claude CLI disables tools and uses plan mode;
+when the official `claude` binary is absent, the `claude` provider can use the
+installed OpenClaude-compatible CLI. OpenCode is loaded from
 `~/.opencode/bin/opencode` by default and runs with `--pure --agent plan` in an
 empty temporary directory. Prompt payloads are kept out of process arguments.
-All external CLI providers require an explicit browser confirmation before every turn
-because their configured models may be remote. Override the server-owned paths
-only at startup with `PENTESTERFLOW_QWEN_PATH` or
-`PENTESTERFLOW_OPENCODE_PATH`. OpenClaude defaults to the local Node 22 binary
-and can be overridden with `PENTESTERFLOW_OPENCLAUDE_PATH`.
+External CLI providers dispatch directly without a blocking browser confirmation.
+Immediately before every cloud invocation, the exact outbound envelope is
+credential-redacted, hashed, audited, and shown as a non-blocking Cloud Preview.
+The raw pre-redaction payload is neither previewed nor persisted. Override the
+server-owned paths only at startup with `PENTESTERFLOW_QWEN_PATH`,
+`PENTESTERFLOW_CODEX_PATH`, `PENTESTERFLOW_CLAUDE_PATH`,
+`PENTESTERFLOW_OPENCODE_PATH`, or `PENTESTERFLOW_OPENCLAUDE_PATH`.
+
+New sessions inherit the provider and model currently selected in the top bar.
+The compact terminal now has a dedicated operation progress dock that shows
+queued, redacted, running, saving, completed, cancelled, and error states.
 
 Web data is stored under `.pentesterflow/web/` and is intentionally ignored by
 Git. Raw artifacts are kept until manually deleted. Preview is redacted by

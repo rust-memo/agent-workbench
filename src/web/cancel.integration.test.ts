@@ -86,7 +86,6 @@ describe.runIf(nodeMajor >= 22)('Web turn cancellation', () => {
     const session = (await sessionResponse.json()) as { id: string };
     const turnResponse = await request(`/sessions/${session.id}/turns`, {
       message: 'wait forever',
-      externalContextApproved: true,
     });
     expect(turnResponse.status).toBe(202);
     try {
@@ -100,6 +99,17 @@ describe.runIf(nodeMajor >= 22)('Web turn cancellation', () => {
         `${error instanceof Error ? error.message : String(error)}: ${await diagnostic.text()}`,
       );
     }
+    const eventsResponse = await fetch(
+      `${base}/api/v1/events?after=0&sessionId=${encodeURIComponent(session.id)}`,
+      { headers: { Cookie: cookie } },
+    );
+    const events = (await eventsResponse.json()) as Array<{
+      type: string;
+      payload: Record<string, unknown>;
+    }>;
+    const preview = events.find((event) => event.type === 'provider.cloud-preview');
+    expect(preview?.payload.provider).toBe('openclaude');
+    expect(preview?.payload.sha256).toMatch(/^[a-f0-9]{64}$/);
 
     const started = Date.now();
     const cancelResponse = await request(`/sessions/${session.id}/cancel`, {});

@@ -37,11 +37,12 @@ const engagementBody = z
     scope: scopeSchema,
   })
   .strict();
+const webProvider = z.enum(['ollama', 'qwen', 'codex', 'claude', 'opencode', 'openclaude']);
 const sessionBody = z
   .object({
     engagementId: z.string().uuid(),
     title: z.string().trim().min(1).max(120),
-    provider: z.enum(['ollama', 'qwen', 'opencode', 'openclaude']).default('qwen'),
+    provider: webProvider.default('qwen'),
     model: z
       .string()
       .trim()
@@ -53,13 +54,13 @@ const sessionBody = z
 const commandBody = z
   .object({
     command: z.string().trim().min(1).max(10_000),
-    externalContextApproved: z.boolean().default(false),
+    externalContextApproved: z.boolean().optional(),
   })
   .strict();
 const turnBody = z
   .object({
     message: z.string().trim().min(1).max(100_000),
-    externalContextApproved: z.boolean().default(false),
+    externalContextApproved: z.boolean().optional(),
   })
   .strict();
 
@@ -152,7 +153,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       runner.health(),
     ]);
     res.json({
-      version: '0.3.1',
+      version: '0.3.2',
       providers: providerCapabilities,
       scanners,
       recovery,
@@ -187,27 +188,21 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     const id = z.string().uuid().parse(req.params.id);
     const body = z
       .object({
-        provider: z.enum(['ollama', 'qwen', 'opencode', 'openclaude']),
+        provider: webProvider,
         model: z
           .string()
           .trim()
           .min(1)
           .max(160)
           .regex(/^[a-zA-Z0-9._:@/+\-]+$/),
-        externalContextApproved: z.boolean().default(false),
+        externalContextApproved: z.boolean().optional(),
       })
       .strict()
       .parse(req.body);
-    if (body.provider !== 'ollama' && !body.externalContextApproved) {
-      return res.status(400).json({
-        error:
-          'External CLI providers may send session context to their configured remote model; explicit approval is required',
-      });
-    }
     database.audit(id, 'session.provider_changed', {
       provider: body.provider,
       model: body.model,
-      externalContextApproved: body.externalContextApproved,
+      dispatchMode: body.provider === 'ollama' ? 'local' : 'direct-redacted',
     });
     return res.json(runtime.configureProvider(id, body.provider, body.model));
   });
@@ -224,13 +219,8 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     const body = turnBody.parse(req.body);
     const session = database.getSession(id);
     if (!session) return res.status(404).json({ error: 'session not found' });
-    if (session.provider !== 'ollama' && !body.externalContextApproved) {
-      return res.status(400).json({
-        error: 'explicit approval is required before sending this turn through a CLI provider',
-      });
-    }
     if (session.provider !== 'ollama') {
-      database.audit(id, 'provider.external_turn_approved', {
+      database.audit(id, 'provider.external_turn_direct', {
         provider: session.provider,
         model: session.model,
         messageBytes: Buffer.byteLength(body.message),
@@ -248,18 +238,8 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     const body = commandBody.parse(req.body);
     const session = database.getSession(id);
     if (!session) return res.status(404).json({ error: 'session not found' });
-    if (
-      commandUsesProvider(body.command) &&
-      session.provider !== 'ollama' &&
-      !body.externalContextApproved
-    ) {
-      return res.status(400).json({
-        error:
-          'explicit approval is required before this command sends session context to a CLI provider',
-      });
-    }
     if (commandUsesProvider(body.command) && session.provider !== 'ollama') {
-      database.audit(id, 'provider.external_command_approved', {
+      database.audit(id, 'provider.external_command_direct', {
         provider: session.provider,
         model: session.model,
         command: body.command.split(/\s+/, 1)[0],

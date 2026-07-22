@@ -1,5 +1,5 @@
 export type WebMode = 'PLAN' | 'RECON';
-export type WebProviderId = 'ollama' | 'qwen' | 'opencode' | 'openclaude';
+export type WebProviderId = 'ollama' | 'qwen' | 'codex' | 'claude' | 'opencode' | 'openclaude';
 
 export interface ProviderCapabilities {
   provider: WebProviderId;

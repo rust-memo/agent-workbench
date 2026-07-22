@@ -12,7 +12,7 @@ export interface Session {
   id: string;
   engagementId: string;
   title: string;
-  provider: 'ollama' | 'qwen' | 'opencode' | 'openclaude';
+  provider: 'ollama' | 'qwen' | 'codex' | 'claude' | 'opencode' | 'openclaude';
   model: string;
   state: 'idle' | 'running' | 'cancelled' | 'error';
 }
