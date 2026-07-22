@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+project_dir="$(cd -- "${script_dir}/.." && pwd -P)"
+port="${PENTESTERFLOW_WEB_PORT:-9099}"
+
+if [[ ! "${port}" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
+  echo "agent-workbench: PENTESTERFLOW_WEB_PORT must be between 1 and 65535." >&2
+  exit 2
+fi
+
+node_bin="${AGENT_WORKBENCH_NODE_BIN:-}"
+if [[ -z "${node_bin}" ]] && command -v node >/dev/null 2>&1; then
+  node_bin="$(command -v node)"
+fi
+
+if [[ ! -x "${node_bin}" ]]; then
+  echo "agent-workbench: Node.js was not found. Set AGENT_WORKBENCH_NODE_BIN to a Node.js 22+ executable." >&2
+  exit 1
+fi
+
+node_major="$("${node_bin}" -p 'Number(process.versions.node.split(".")[0])')"
+if ((node_major < 22)); then
+  echo "agent-workbench: Web mode requires Node.js 22+; ${node_bin} is Node.js $("${node_bin}" --version)." >&2
+  echo "Set AGENT_WORKBENCH_NODE_BIN to your Node.js 22+ executable." >&2
+  exit 1
+fi
+
+if [[ ! -f "${project_dir}/dist/web.js" ]]; then
+  echo "agent-workbench: dist/web.js is missing. Run 'npm install && npm run build' in ${project_dir}." >&2
+  exit 1
+fi
+
+listener_pids() {
+  ss -H -ltnp "sport = :${port}" 2>/dev/null \
+    | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' \
+    | sort -u
+}
+
+existing_pids="$(listener_pids)"
+if [[ -n "${existing_pids}" ]]; then
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    process_cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+    process_cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+
+    if [[ "${process_cwd}" != "${project_dir}" || "${process_cmd}" != *"dist/web.js"* ]]; then
+      echo "agent-workbench: port ${port} is used by PID ${pid}, which is not this project's Web server." >&2
+      echo "Close that process or choose another PENTESTERFLOW_WEB_PORT." >&2
+      exit 1
+    fi
+
+    echo "agent-workbench: stopping the previous server on 127.0.0.1:${port} (PID ${pid})..."
+    kill -TERM "${pid}"
+  done <<< "${existing_pids}"
+
+  for _ in {1..50}; do
+    [[ -z "$(listener_pids)" ]] && break
+    sleep 0.1
+  done
+
+  if [[ -n "$(listener_pids)" ]]; then
+    echo "agent-workbench: the previous server did not stop cleanly; refusing to force-kill it." >&2
+    exit 1
+  fi
+fi
+
+echo "agent-workbench: starting in this terminal. Press Ctrl+C to stop and invalidate browser access."
+cd -- "${project_dir}"
+exec "${node_bin}" dist/web.js

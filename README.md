@@ -173,6 +173,21 @@ npm run scanner:build:all
 npm run start:web
 ```
 
+For a foreground, one-command launch from this source checkout, install the
+project launcher once and run `aw` from any terminal:
+
+```sh
+ln -s "$PWD/scripts/agent-workbench-web" "$HOME/.local/bin/aw"
+aw
+```
+
+`aw` prints a fresh single-use pairing URL and keeps the server attached to the
+current terminal. Pressing `Ctrl+C` or closing that terminal shuts down the
+server and invalidates its in-memory pairing token and browser authentication
+sessions. Saved assessments remain in SQLite. If port 9099 already belongs to
+this checkout, `aw` replaces that server cleanly; it refuses to terminate an
+unrelated process.
+
 The server binds only to:
 
 ```text
