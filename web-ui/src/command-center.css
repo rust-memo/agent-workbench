@@ -1877,3 +1877,339 @@
     display: none;
   }
 }
+
+/* Readable large-type pass. Times New Roman is intentionally used throughout
+ * the workbench at the operator's request; spacing is increased with it. */
+body,
+button,
+textarea,
+input,
+select,
+.shell {
+  font-family: "Times New Roman", Times, serif;
+}
+
+.brand strong {
+  font-size: 20px;
+  letter-spacing: .035em;
+}
+
+.sidebar-nav-v5 {
+  gap: 6px;
+}
+
+.sidebar-nav-v5 button {
+  min-height: 48px;
+  grid-template-columns: 29px minmax(0, 1fr) auto;
+  gap: 10px;
+  font-size: 15px;
+}
+
+.sidebar-nav-v5 button > i {
+  font-size: 18px;
+}
+
+.sidebar-nav-v5 button > em {
+  font-size: 11px;
+}
+
+.sidebar-status-v5 > div {
+  min-height: 69px;
+}
+
+.sidebar-status-v5 strong {
+  font-size: 14px;
+}
+
+.sidebar-status-v5 small {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.mission-stat {
+  min-height: 80px;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 13px;
+  padding: 13px 15px;
+}
+
+.mission-stat > i {
+  width: 42px;
+  height: 42px;
+  font-size: 21px;
+}
+
+.mission-stat span {
+  font-size: 12px;
+}
+
+.mission-stat strong {
+  margin-top: 4px;
+  font-size: 18px;
+}
+
+.mission-stat small {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.mission-toolbar {
+  min-height: 60px;
+}
+
+.mission-scope span {
+  font-size: 11px;
+}
+
+.mission-scope strong {
+  font: 600 14px / 1.4 "Times New Roman", Times, serif;
+}
+
+.mission-pages button {
+  min-width: 130px;
+  height: 35px;
+  font-size: 13px;
+}
+
+.mission-pages small {
+  font-size: 10px;
+}
+
+.mission-actions > select,
+.mission-actions > button,
+.mission-policy > summary {
+  height: 36px;
+  font-size: 13px;
+}
+
+.transcript-card {
+  grid-template-rows: 58px auto minmax(0, 1fr);
+}
+
+.transcript-card > header {
+  padding: 0 16px;
+}
+
+.transcript-card > header strong {
+  font-size: 16px;
+}
+
+.stream-state,
+.transcript-controls > label {
+  font-size: 12px;
+}
+
+.stream-filters button {
+  padding: 5px 9px;
+  font-size: 11px;
+}
+
+.transcript-progress span,
+.transcript-progress strong {
+  font: 12px / 1.4 "Times New Roman", Times, serif;
+}
+
+.transcript-stream {
+  padding: 16px 18px 32px;
+}
+
+.transcript-stream article {
+  grid-template-columns: 86px 76px minmax(0, 1fr);
+  gap: 11px;
+  padding: 5px 0;
+}
+
+.transcript-stream time,
+.transcript-stream article > span,
+.transcript-stream pre {
+  font: 14px / 1.6 "Times New Roman", Times, serif;
+}
+
+.transcript-stream article > span {
+  font-weight: 700;
+}
+
+.transcript-empty > span {
+  font: 30px "Times New Roman", Times, serif;
+}
+
+.transcript-empty strong {
+  font-size: 16px;
+}
+
+.transcript-empty p {
+  max-width: 420px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.approval-panel > header strong,
+.rail-card > header strong {
+  font-size: 17px;
+}
+
+.approval-panel.pending > header span,
+.rail-card-meta > span {
+  font-size: 13px;
+}
+
+.rail-card-meta > small,
+.rail-card-meta > button {
+  font-size: 12px;
+}
+
+.approval-copy h3 {
+  font-size: 16px;
+}
+
+.approval-panel dt,
+.approval-panel dd,
+.approval-copy > p {
+  font-size: 13px;
+}
+
+.approval-panel dl div {
+  grid-template-columns: 92px minmax(0, 1fr);
+}
+
+.approval-buttons button {
+  height: 43px;
+  font-size: 13px;
+}
+
+.approval-clear p {
+  font-size: 13px;
+}
+
+.artifact-peek article {
+  min-height: 39px;
+}
+
+.artifact-peek article strong,
+.artifact-peek time {
+  font-size: 13px;
+}
+
+.severity-bars span,
+.severity-bars strong,
+.coverage-peek > span {
+  font-size: 13px;
+}
+
+.coverage-peek small {
+  font-size: 11px;
+}
+
+.rail-list article strong {
+  font-size: 14px;
+}
+
+.rail-list article small,
+.rail-list article em {
+  font-size: 11px;
+}
+
+.recommendation-peek article > span,
+.recommendation-peek button {
+  font-size: 11px;
+}
+
+.recommendation-peek strong {
+  font-size: 14px;
+}
+
+.recommendation-peek p,
+.rail-empty {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.audit-strip > div span {
+  font-size: 15px;
+}
+
+.audit-strip > div small,
+.audit-strip > strong {
+  font-size: 13px;
+}
+
+.sidebar-flyout-v5 > header span {
+  font-size: 11px;
+}
+
+.sidebar-flyout-v5 > header strong {
+  font-size: 19px;
+}
+
+.flyout-primary-v5,
+.flyout-session-list-v5 strong,
+.flyout-scope-v5 p,
+.flyout-report-v5 p,
+.sidebar-provider-form-v5 select,
+.sidebar-provider-form-v5 button,
+.flyout-report-v5 a {
+  font-size: 12px;
+}
+
+.flyout-session-list-v5 small,
+.flyout-scope-v5 code,
+.sidebar-provider-form-v5 label > span,
+.flyout-settings-v5 article > span {
+  font-size: 12px;
+}
+
+.flyout-scope-v5 h2,
+.flyout-report-v5 h2 {
+  font-size: 21px;
+}
+
+.flyout-settings-v5 strong {
+  font-size: 15px;
+}
+
+.flyout-settings-v5 small {
+  font-size: 12px;
+}
+
+.panel-head h1,
+.recon-toolbar strong {
+  font-size: 19px;
+}
+
+.eyebrow,
+.profile-select span,
+.new-scope label > span {
+  font-size: 12px;
+}
+
+.recon-toolbar small,
+.pipeline-step small,
+.pipeline-step code {
+  font-size: 13px;
+}
+
+.profile-select select,
+.primary-action,
+.quiet-action,
+.scope-policy-buttons button {
+  font-size: 14px;
+}
+
+.pipeline-step strong {
+  font-size: 15px;
+}
+
+.results-panel h2,
+.skills-panel h2 {
+  font-size: 17px;
+}
+
+.composer textarea {
+  font-family: "Times New Roman", Times, serif;
+  font-size: 18px;
+  line-height: 1.45;
+}
+
+.composer button {
+  font-size: 15px;
+}
