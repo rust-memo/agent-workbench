@@ -5,11 +5,12 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import helmet from 'helmet';
 import { WebSocketServer } from 'ws';
 import { ZodError, z } from 'zod';
+import { ActionService, publicProposal } from './actions/service.js';
 import { WEB_SLASH_COMMANDS, commandUsesProvider } from './commands.js';
 import { EventHub } from './events.js';
 import { WebProviderManager } from './providers/manager.js';
 import { WebRuntimeManager } from './runtime.js';
-import { LocalScannerRunner } from './scanners/localRunner.js';
+import { DockerScannerRunner } from './scanners/dockerRunner.js';
 import { createScope, scopeSchema } from './scope.js';
 import { PairingManager } from './security/pairing.js';
 import { ArtifactStore } from './storage/artifacts.js';
@@ -73,11 +74,12 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
   );
   const recovery = artifacts.recover();
   const pairing = new PairingManager();
-  const runner = new LocalScannerRunner();
+  const runner = new DockerScannerRunner();
   const providers = new WebProviderManager(
     options.ollamaBaseURL ?? process.env.PENTESTERFLOW_OLLAMA_URL ?? 'http://127.0.0.1:11434',
   );
-  const runtime = new WebRuntimeManager(database, artifacts, events, runner, providers);
+  const actions = new ActionService(database, artifacts, events, runner);
+  const runtime = new WebRuntimeManager(database, artifacts, events, runner, providers, actions);
   const app = express();
 
   app.disable('x-powered-by');
@@ -150,7 +152,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       runner.health(),
     ]);
     res.json({
-      version: '0.2.2',
+      version: '0.3.0',
       providers: providerCapabilities,
       scanners,
       recovery,
@@ -270,6 +272,82 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     const id = z.string().uuid().parse(req.params.id);
     res.json(database.listArtifacts(id));
   });
+  app.get('/api/v1/sessions/:id/actions', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
+    res.json(database.listActionProposals(id).map(publicProposal));
+  });
+  app.post('/api/v1/sessions/:id/actions/:proposalId/approve', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const proposalId = z.string().uuid().parse(req.params.proposalId);
+    const body = z
+      .object({ approvalHash: z.string().regex(/^[a-f0-9]{64}$/) })
+      .strict()
+      .parse(req.body);
+    const browserSessionId = z.string().min(1).parse(res.locals.browserSession.sessionId);
+    res
+      .status(202)
+      .json(runtime.approveAction(id, proposalId, body.approvalHash, browserSessionId));
+  });
+  app.get('/api/v1/sessions/:id/findings', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
+    res.json(database.listFindings(id));
+  });
+  app.patch('/api/v1/sessions/:id/findings/:findingId', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const findingId = z.string().uuid().parse(req.params.findingId);
+    const body = z
+      .object({
+        status: z.enum(['needs_validation', 'confirmed', 'false_positive', 'informational']),
+        validationArtifactId: z.string().uuid().optional(),
+        validationNote: z.string().trim().min(10).max(2000).optional(),
+      })
+      .strict()
+      .superRefine((value, context) => {
+        if (value.status === 'confirmed' && (!value.validationArtifactId || !value.validationNote))
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'confirmed findings require a validation artifact and note',
+          });
+      })
+      .parse(req.body);
+    if (body.validationArtifactId) {
+      const evidence = database.getArtifact(body.validationArtifactId);
+      if (!evidence || evidence.sessionId !== id)
+        return res.status(400).json({ error: 'validation artifact was not found in this session' });
+    }
+    const finding = database.updateFindingStatus(
+      findingId,
+      id,
+      body.status,
+      body.validationArtifactId && body.validationNote
+        ? { artifactId: body.validationArtifactId, note: body.validationNote }
+        : undefined,
+    );
+    database.audit(id, 'finding.status_changed', {
+      findingId,
+      status: body.status,
+      validationArtifactId: body.validationArtifactId,
+    });
+    events.publish({
+      engagementId: finding.engagementId,
+      sessionId: id,
+      type: 'finding.updated',
+      payload: finding,
+    });
+    res.json(finding);
+  });
+  app.get('/api/v1/sessions/:id/coverage', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const status = req.query.status
+      ? z
+          .enum(['untested', 'tried', 'passed', 'failed', 'waf-blocked', 'skipped'])
+          .parse(req.query.status)
+      : undefined;
+    if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
+    res.json({ summary: database.coverageSummary(id), rows: database.listCoverage(id, status) });
+  });
   app.get('/api/v1/artifacts/:id/preview', (req, res) => {
     const id = z.string().uuid().parse(req.params.id);
     const artifact = database.getArtifact(id);
@@ -308,7 +386,11 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     const message = error instanceof Error ? error.message : 'internal error';
     const status = message.includes('not found')
       ? 404
-      : message.includes('already running')
+      : message.includes('already running') ||
+          message.includes('no longer pending') ||
+          message.includes('already consumed') ||
+          message.includes('expired') ||
+          message.includes('scope changed')
         ? 409
         : 500;
     return res.status(status).json({ error: status === 500 ? 'request failed' : message });

@@ -35,7 +35,7 @@ describe.runIf(nodeMajor >= 22)('Web turn cancellation', () => {
     await writeFile(
       providerPath,
       [
-        '#!/usr/bin/env node',
+        `#!${process.execPath}`,
         "const { spawnSync } = require('node:child_process');",
         "if (process.argv.includes('--version')) { console.log('fake 1.0.0'); process.exit(0); }",
         `const result = spawnSync(process.execPath, ['-e', ${JSON.stringify(stubbornChild)}], { stdio: 'inherit' });`,
@@ -89,7 +89,17 @@ describe.runIf(nodeMajor >= 22)('Web turn cancellation', () => {
       externalContextApproved: true,
     });
     expect(turnResponse.status).toBe(202);
-    await waitForFile(childPidPath);
+    try {
+      await waitForFile(childPidPath);
+    } catch (error) {
+      const diagnostic = await fetch(
+        `${base}/api/v1/events?after=0&sessionId=${encodeURIComponent(session.id)}`,
+        { headers: { Cookie: cookie } },
+      );
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}: ${await diagnostic.text()}`,
+      );
+    }
 
     const started = Date.now();
     const cancelResponse = await request(`/sessions/${session.id}/cancel`, {});

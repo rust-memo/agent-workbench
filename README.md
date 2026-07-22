@@ -16,7 +16,7 @@ control.
 [![license: Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![stars](https://img.shields.io/github/stars/rust-memo/agent-workbench?style=social)](https://github.com/rust-memo/agent-workbench/stargazers)
 
-**[Install](#install) · [Web Workbench](#local-web-workbench-v021) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
+**[Install](#install) · [Web Workbench](#local-web-workbench-v030) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
 
 </div>
 
@@ -112,7 +112,7 @@ irm https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.ps1
 Pin a release or choose an install directory:
 
 ```sh
-PENTESTERFLOW_VERSION=v0.2.2 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
+PENTESTERFLOW_VERSION=v0.3.0 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh)"
 ```
 
@@ -153,7 +153,7 @@ pentesterflow --resume <session-id>
 On resume, PentesterFlow automatically shows a recap of the previous session's
 persistent memory so you can continue without manually reconstructing context.
 
-## Local Web Workbench (v0.2.2)
+## Local Web Workbench (v0.3.0)
 
 The Web workbench keeps the existing CLI intact and adds an English-only,
 terminal-style local interface. Web sessions use SQLite as their only source of
@@ -163,12 +163,13 @@ JSON/SQLite synchronization.
 Requirements for the Web server:
 
 - Node.js 22 or newer (the CLI remains compatible with Node.js 20).
+- Docker Engine with permission for the local user to create containers.
 - At least one provider: Ollama, Qwen Code, OpenCode, or OpenClaude.
-- `subfinder` and ProjectDiscovery `httpx` on the host for Recon actions.
 
 ```sh
 npm install
 npm run build
+npm run scanner:build
 npm run start:web
 ```
 
@@ -182,14 +183,36 @@ Open the single-use pairing URL printed in the terminal. The fragment is
 exchanged for an HttpOnly, SameSite=Strict session cookie and is removed from
 the browser address bar immediately.
 
-v0.2.2 includes general assistance, Plan and low-impact Recon modes, an
+v0.3.0 includes general assistance, Plan and low-impact Recon modes, an
 Ollama/Qwen Code/OpenCode/OpenClaude provider and checked-model switcher,
-Subfinder, HTTPX,
-SQLite event replay, cancellation, and hash-addressed artifacts. Scanner
-actions use server-defined argument arrays without a shell. Scope enforcement
-is fail-closed for action inputs and best-effort at the network layer; it is not
-claimed to be complete egress isolation. Out-of-scope discoveries are retained
-and classified but are never placed into the active-action queue.
+Subfinder, DNSX, HTTPX, Katana, Nuclei, SQLite event replay, cancellation,
+hash-addressed artifacts, approval proposals, Findings, and Coverage. All five
+scanners run in an ephemeral `agent-workbench-scanner-safe:0.3.0` container.
+The server owns the image, entrypoint, flags, network mode, resource limits,
+user, and capabilities; targets are sent through stdin. Scanner containers are
+read-only, non-root, capability-free, `no-new-privileges`, resource-limited,
+and receive no host mounts, Docker socket, home directory, or AI credentials.
+
+DNSX and HTTPX are low-impact Recon actions when direct recon is enabled.
+Katana and Nuclei create an operator-visible proposal instead of executing in
+the model turn. Approval uses canonical JSON plus the action, mode, and scope
+version; it expires after ten minutes and is consumed exactly once. Editing any
+argument or changing scope invalidates it. Cancellation removes the exact
+ephemeral scanner container.
+
+Nuclei v3.11.0 uses nuclei-templates commit
+`7d66fa06cc0a5ad85f7bf35f18cf8ee9218fa9a5`. Only HTTP templates are loaded;
+code, headless, file, JavaScript, TCP, Interactsh/OAST, redirects, custom
+template paths, unsigned arbitrary templates, and high-impact tags are not
+available through the Web action. Scanner matches are stored as
+`needs_validation` (or informational), never as confirmed findings. Manual
+confirmation is explicit and audited.
+
+Scope enforcement is fail-closed for action inputs and best-effort at the
+network layer; it is not claimed to be complete egress isolation. Out-of-scope
+discoveries are retained and classified but are never placed into the
+active-action queue. A controlled egress proxy or network policy is still
+required for a hard network-level scope guarantee.
 
 Type `/` in the Web composer to open the terminal-style command menu. Web-safe
 implementations include `/help`, `/provider`, `/model`, `/plan`, `/next`,
@@ -199,10 +222,10 @@ implementations include `/help`, `/provider`, `/model`, `/plan`, `/next`,
 trusted terminal. Slash commands are parsed as typed backend actions and never
 as shell text.
 
-Cancellation now records an immediate `turn.cancel-requested` event and kills
-the complete CLI-provider process group, including provider launchers that
-spawn child processes. A short forced-kill fallback prevents stuck turns while
-the final `turn.finished` event records `cancelled` deterministically.
+Cancellation records an immediate `turn.cancel-requested` or
+`action.cancel-requested` event. It kills the complete CLI-provider process
+group or removes the exact scanner container. A short forced-kill fallback
+prevents stuck turns while the final event records cancellation deterministically.
 
 Configuration:
 

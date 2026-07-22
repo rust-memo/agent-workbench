@@ -1,9 +1,75 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { DockerScannerRunner, SAFE_SCANNER_IMAGE } from './dockerRunner.js';
 import { clean } from './localRunner.js';
+
+const roots: string[] = [];
+afterEach(async () => {
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
 
 describe('scanner output sanitation', () => {
   it('removes ANSI, OSC, control and null-byte output', () => {
     const malicious = '\u001b]0;owned\u0007safe\u001b[31m red\u001b[0m\u0000';
     expect(clean(malicious)).toBe('safe red');
+  });
+});
+
+describe('Docker scanner boundary', () => {
+  it('uses fixed hardening, no mounts, and sends targets through stdin', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-workbench-docker-test-'));
+    roots.push(root);
+    const log = join(root, 'calls.jsonl');
+    const fakeDocker = join(root, 'docker');
+    await writeFile(
+      fakeDocker,
+      [
+        `#!${process.execPath}`,
+        "const fs = require('fs');",
+        `const log = ${JSON.stringify(log)};`,
+        'const args = process.argv.slice(2);',
+        "if (args[0] !== 'run') { fs.appendFileSync(log, JSON.stringify({ args, input: '' }) + '\\n'); process.exit(0); }",
+        "let input = '';",
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.on('data', (chunk) => { input += chunk; });",
+        "process.stdin.on('end', () => {",
+        "  fs.appendFileSync(log, JSON.stringify({ args, input }) + '\\n');",
+        "  if (process.argv.includes('run')) process.stdout.write('{}\\n');",
+        '});',
+        'process.stdin.resume();',
+      ].join('\n'),
+      { mode: 0o700 },
+    );
+    const runner = new DockerScannerRunner(SAFE_SCANNER_IMAGE, fakeDocker);
+    const target = 'example.com;touch /tmp/owned';
+    const result = await runner.dnsx(
+      [target],
+      {
+        requestsPerSecond: 5,
+        concurrency: 4,
+        maxUrlsPerHost: 100,
+        maxRedirects: 0,
+        maxRuntimeSeconds: 30,
+        maxOutputBytes: 1024 * 1024,
+      },
+      new AbortController().signal,
+    );
+    expect(result.exitCode, result.stderr).toBe(0);
+    const calls = (await readFile(log, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { args: string[]; input: string });
+    const run = calls.find((call) => call.args[0] === 'run');
+    expect(run?.input).toBe(`${target}\n`);
+    expect(run?.args).not.toContain(target);
+    expect(run?.args).toContain('--read-only');
+    expect(run?.args).toContain('no-new-privileges:true');
+    expect(run?.args).toContain('ALL');
+    expect(run?.args).not.toContain('--privileged');
+    expect(run?.args).not.toContain('--volume');
+    expect(run?.args.join(' ')).not.toContain('docker.sock');
+    expect(run?.args).toContain(SAFE_SCANNER_IMAGE);
   });
 });

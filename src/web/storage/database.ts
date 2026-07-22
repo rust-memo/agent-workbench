@@ -3,9 +3,14 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import type {
+  ActionProposalRecord,
   ArtifactRecord,
+  CoverageStatus,
+  FindingStatus,
   RuntimeEvent,
   ScopeDefinition,
+  WebCoverageRecord,
+  WebFindingRecord,
   WebMode,
   WebProviderId,
 } from '../types.js';
@@ -122,6 +127,68 @@ export class WebDatabase {
         payload_json TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS action_proposals (
+        id TEXT PRIMARY KEY,
+        engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        turn_id TEXT,
+        action TEXT NOT NULL CHECK(action IN ('katana','nuclei')),
+        arguments_json TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        risk TEXT NOT NULL CHECK(risk IN ('medium','high')),
+        scope_version INTEGER NOT NULL,
+        approval_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending','running','completed','failed','cancelled','expired')),
+        expires_at TEXT NOT NULL,
+        approved_by TEXT,
+        approved_at TEXT,
+        consumed_at TEXT,
+        result_artifact_id TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS action_proposals_session_created
+        ON action_proposals(session_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS findings (
+        id TEXT PRIMARY KEY,
+        engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        action_proposal_id TEXT REFERENCES action_proposals(id) ON DELETE SET NULL,
+        evidence_artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE RESTRICT,
+        title TEXT NOT NULL,
+        severity TEXT NOT NULL CHECK(severity IN ('critical','high','medium','low','info')),
+        status TEXT NOT NULL CHECK(status IN ('needs_validation','confirmed','false_positive','informational')),
+        confidence TEXT NOT NULL CHECK(confidence = 'scanner'),
+        url TEXT NOT NULL,
+        scanner TEXT NOT NULL CHECK(scanner = 'nuclei'),
+        scanner_reference TEXT NOT NULL,
+        description TEXT,
+        remediation TEXT,
+        validation_artifact_id TEXT REFERENCES artifacts(id) ON DELETE RESTRICT,
+        validation_note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(session_id, scanner, scanner_reference, url)
+      );
+      CREATE INDEX IF NOT EXISTS findings_session_created ON findings(session_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS coverage (
+        id TEXT PRIMARY KEY,
+        engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        asset TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        parameter TEXT NOT NULL,
+        vulnerability_class TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('untested','tried','passed','failed','waf-blocked','skipped')),
+        source TEXT NOT NULL,
+        notes TEXT,
+        attempts INTEGER NOT NULL,
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        UNIQUE(session_id, endpoint, parameter, vulnerability_class)
+      );
+      CREATE INDEX IF NOT EXISTS coverage_session_status ON coverage(session_id, status);
     `);
     const sessionColumns = this.db.prepare('PRAGMA table_info(sessions)').all() as Array<{
       name: string;
@@ -129,10 +196,17 @@ export class WebDatabase {
     if (!sessionColumns.some((column) => column.name === 'provider')) {
       this.db.exec("ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'ollama'");
     }
+    const findingColumns = this.db.prepare('PRAGMA table_info(findings)').all() as Array<{
+      name: string;
+    }>;
+    if (!findingColumns.some((column) => column.name === 'validation_artifact_id'))
+      this.db.exec('ALTER TABLE findings ADD COLUMN validation_artifact_id TEXT');
+    if (!findingColumns.some((column) => column.name === 'validation_note'))
+      this.db.exec('ALTER TABLE findings ADD COLUMN validation_note TEXT');
     // A process died while running these turns; do not present them as live
     // after restart and never preserve an in-memory approval implicitly.
     this.db.exec(
-      "UPDATE sessions SET state = 'error' WHERE state = 'running'; UPDATE turns SET status = 'error', completed_at = datetime('now') WHERE status = 'running';",
+      "UPDATE sessions SET state = 'error' WHERE state = 'running'; UPDATE turns SET status = 'error', completed_at = datetime('now') WHERE status = 'running'; UPDATE action_proposals SET status = 'failed', error = 'server restarted during execution', updated_at = datetime('now') WHERE status = 'running';",
     );
   }
 
@@ -321,6 +395,247 @@ export class WebDatabase {
       )
       .run(sessionId ?? null, action, JSON.stringify(payload), new Date().toISOString());
   }
+
+  createActionProposal(
+    input: Omit<
+      ActionProposalRecord,
+      | 'id'
+      | 'status'
+      | 'approvedBy'
+      | 'approvedAt'
+      | 'consumedAt'
+      | 'resultArtifactId'
+      | 'error'
+      | 'createdAt'
+      | 'updatedAt'
+    >,
+  ): ActionProposalRecord {
+    const now = new Date().toISOString();
+    const record: ActionProposalRecord = {
+      ...input,
+      id: randomUUID(),
+      status: 'pending',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(`INSERT INTO action_proposals
+      (id, engagement_id, session_id, turn_id, action, arguments_json, reason, risk, scope_version, approval_hash, status, expires_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        record.id,
+        record.engagementId,
+        record.sessionId,
+        record.turnId ?? null,
+        record.action,
+        JSON.stringify(record.arguments),
+        record.reason,
+        record.risk,
+        record.scopeVersion,
+        record.approvalHash,
+        record.status,
+        record.expiresAt,
+        now,
+        now,
+      );
+    return record;
+  }
+
+  getActionProposal(id: string): ActionProposalRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM action_proposals WHERE id = ?').get(id) as
+      | SqlRow
+      | undefined;
+    return row ? actionProposalFromRow(row) : undefined;
+  }
+
+  listActionProposals(sessionId: string): ActionProposalRecord[] {
+    this.db
+      .prepare(
+        "UPDATE action_proposals SET status = 'expired', updated_at = ? WHERE session_id = ? AND status = 'pending' AND expires_at <= ?",
+      )
+      .run(new Date().toISOString(), sessionId, new Date().toISOString());
+    return (
+      this.db
+        .prepare('SELECT * FROM action_proposals WHERE session_id = ? ORDER BY created_at DESC')
+        .all(sessionId) as SqlRow[]
+    ).map(actionProposalFromRow);
+  }
+
+  claimActionProposal(
+    id: string,
+    approvalHash: string,
+    approvedBy: string,
+    scopeVersion: number,
+  ): ActionProposalRecord {
+    const proposal = this.getActionProposal(id);
+    if (!proposal) throw new Error('action proposal not found');
+    if (proposal.status !== 'pending') throw new Error('action proposal is no longer pending');
+    if (proposal.approvalHash !== approvalHash) throw new Error('action proposal hash mismatch');
+    if (proposal.scopeVersion !== scopeVersion)
+      throw new Error('scope changed; create a new proposal');
+    if (Date.parse(proposal.expiresAt) <= Date.now()) {
+      this.finishActionProposal(id, 'expired', undefined, 'approval expired');
+      throw new Error('action proposal expired');
+    }
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare(`UPDATE action_proposals
+        SET status = 'running', approved_by = ?, approved_at = ?, consumed_at = ?, updated_at = ?
+        WHERE id = ? AND status = 'pending'`)
+      .run(approvedBy, now, now, now, id);
+    if (Number(result.changes) !== 1) throw new Error('action proposal was already consumed');
+    const claimed = this.getActionProposal(id);
+    if (!claimed) throw new Error('action proposal not found');
+    return claimed;
+  }
+
+  finishActionProposal(
+    id: string,
+    status: 'completed' | 'failed' | 'cancelled' | 'expired',
+    resultArtifactId?: string,
+    error?: string,
+  ): void {
+    this.db
+      .prepare(
+        'UPDATE action_proposals SET status = ?, result_artifact_id = ?, error = ?, updated_at = ? WHERE id = ?',
+      )
+      .run(status, resultArtifactId ?? null, error ?? null, new Date().toISOString(), id);
+  }
+
+  insertFinding(
+    input: Omit<WebFindingRecord, 'id' | 'createdAt' | 'updatedAt'>,
+  ): WebFindingRecord | undefined {
+    const now = new Date().toISOString();
+    const record: WebFindingRecord = { ...input, id: randomUUID(), createdAt: now, updatedAt: now };
+    const result = this.db
+      .prepare(`INSERT OR IGNORE INTO findings
+      (id, engagement_id, session_id, action_proposal_id, evidence_artifact_id, title, severity, status, confidence, url, scanner, scanner_reference, description, remediation, validation_artifact_id, validation_note, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        record.id,
+        record.engagementId,
+        record.sessionId,
+        record.actionProposalId ?? null,
+        record.evidenceArtifactId,
+        record.title,
+        record.severity,
+        record.status,
+        record.confidence,
+        record.url,
+        record.scanner,
+        record.scannerReference,
+        record.description ?? null,
+        record.remediation ?? null,
+        record.validationArtifactId ?? null,
+        record.validationNote ?? null,
+        now,
+        now,
+      );
+    return Number(result.changes) === 1 ? record : undefined;
+  }
+
+  listFindings(sessionId: string): WebFindingRecord[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM findings WHERE session_id = ? ORDER BY created_at DESC')
+        .all(sessionId) as SqlRow[]
+    ).map(findingFromRow);
+  }
+
+  updateFindingStatus(
+    id: string,
+    sessionId: string,
+    status: FindingStatus,
+    validation?: { artifactId: string; note: string },
+  ): WebFindingRecord {
+    const result = this.db
+      .prepare(
+        'UPDATE findings SET status = ?, validation_artifact_id = ?, validation_note = ?, updated_at = ? WHERE id = ? AND session_id = ?',
+      )
+      .run(
+        status,
+        validation?.artifactId ?? null,
+        validation?.note ?? null,
+        new Date().toISOString(),
+        id,
+        sessionId,
+      );
+    if (Number(result.changes) !== 1) throw new Error('finding not found');
+    const row = this.db.prepare('SELECT * FROM findings WHERE id = ?').get(id) as SqlRow;
+    return findingFromRow(row);
+  }
+
+  upsertCoverage(
+    input: Omit<WebCoverageRecord, 'id' | 'attempts' | 'firstSeenAt' | 'lastSeenAt'>,
+  ): WebCoverageRecord {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(`INSERT INTO coverage
+      (id, engagement_id, session_id, asset, endpoint, parameter, vulnerability_class, status, source, notes, attempts, first_seen_at, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      ON CONFLICT(session_id, endpoint, parameter, vulnerability_class) DO UPDATE SET
+        asset = excluded.asset,
+        status = excluded.status,
+        source = excluded.source,
+        notes = excluded.notes,
+        attempts = coverage.attempts + 1,
+        last_seen_at = excluded.last_seen_at`)
+      .run(
+        randomUUID(),
+        input.engagementId,
+        input.sessionId,
+        input.asset,
+        input.endpoint,
+        input.parameter,
+        input.vulnerabilityClass,
+        input.status,
+        input.source,
+        input.notes ?? null,
+        now,
+        now,
+      );
+    const row = this.db
+      .prepare(
+        'SELECT * FROM coverage WHERE session_id = ? AND endpoint = ? AND parameter = ? AND vulnerability_class = ?',
+      )
+      .get(input.sessionId, input.endpoint, input.parameter, input.vulnerabilityClass) as SqlRow;
+    return coverageFromRow(row);
+  }
+
+  listCoverage(sessionId: string, status?: CoverageStatus): WebCoverageRecord[] {
+    const rows = status
+      ? this.db
+          .prepare(
+            'SELECT * FROM coverage WHERE session_id = ? AND status = ? ORDER BY last_seen_at DESC',
+          )
+          .all(sessionId, status)
+      : this.db
+          .prepare('SELECT * FROM coverage WHERE session_id = ? ORDER BY last_seen_at DESC')
+          .all(sessionId);
+    return (rows as SqlRow[]).map(coverageFromRow);
+  }
+
+  coverageSummary(sessionId: string): Record<CoverageStatus | 'total', number> {
+    const summary: Record<CoverageStatus | 'total', number> = {
+      total: 0,
+      untested: 0,
+      tried: 0,
+      passed: 0,
+      failed: 0,
+      'waf-blocked': 0,
+      skipped: 0,
+    };
+    for (const row of this.db
+      .prepare(
+        'SELECT status, COUNT(*) AS count FROM coverage WHERE session_id = ? GROUP BY status',
+      )
+      .all(sessionId) as SqlRow[]) {
+      const status = String(row.status) as CoverageStatus;
+      summary[status] = Number(row.count);
+      summary.total += Number(row.count);
+    }
+    return summary;
+  }
 }
 
 function engagementFromRow(r: SqlRow): EngagementRow {
@@ -372,5 +687,70 @@ function artifactFromRow(r: SqlRow): ArtifactRecord {
     status: String(r.status) as ArtifactRecord['status'],
     metadata: JSON.parse(String(r.metadata_json)),
     createdAt: String(r.created_at),
+  };
+}
+
+function actionProposalFromRow(r: SqlRow): ActionProposalRecord {
+  return {
+    id: String(r.id),
+    engagementId: String(r.engagement_id),
+    sessionId: String(r.session_id),
+    turnId: r.turn_id ? String(r.turn_id) : undefined,
+    action: String(r.action) as ActionProposalRecord['action'],
+    arguments: JSON.parse(String(r.arguments_json)),
+    reason: String(r.reason),
+    risk: String(r.risk) as ActionProposalRecord['risk'],
+    scopeVersion: Number(r.scope_version),
+    approvalHash: String(r.approval_hash),
+    status: String(r.status) as ActionProposalRecord['status'],
+    expiresAt: String(r.expires_at),
+    approvedBy: r.approved_by ? String(r.approved_by) : undefined,
+    approvedAt: r.approved_at ? String(r.approved_at) : undefined,
+    consumedAt: r.consumed_at ? String(r.consumed_at) : undefined,
+    resultArtifactId: r.result_artifact_id ? String(r.result_artifact_id) : undefined,
+    error: r.error ? String(r.error) : undefined,
+    createdAt: String(r.created_at),
+    updatedAt: String(r.updated_at),
+  };
+}
+
+function findingFromRow(r: SqlRow): WebFindingRecord {
+  return {
+    id: String(r.id),
+    engagementId: String(r.engagement_id),
+    sessionId: String(r.session_id),
+    actionProposalId: r.action_proposal_id ? String(r.action_proposal_id) : undefined,
+    evidenceArtifactId: String(r.evidence_artifact_id),
+    title: String(r.title),
+    severity: String(r.severity) as WebFindingRecord['severity'],
+    status: String(r.status) as WebFindingRecord['status'],
+    confidence: 'scanner',
+    url: String(r.url),
+    scanner: 'nuclei',
+    scannerReference: String(r.scanner_reference),
+    description: r.description ? String(r.description) : undefined,
+    remediation: r.remediation ? String(r.remediation) : undefined,
+    validationArtifactId: r.validation_artifact_id ? String(r.validation_artifact_id) : undefined,
+    validationNote: r.validation_note ? String(r.validation_note) : undefined,
+    createdAt: String(r.created_at),
+    updatedAt: String(r.updated_at),
+  };
+}
+
+function coverageFromRow(r: SqlRow): WebCoverageRecord {
+  return {
+    id: String(r.id),
+    engagementId: String(r.engagement_id),
+    sessionId: String(r.session_id),
+    asset: String(r.asset),
+    endpoint: String(r.endpoint),
+    parameter: String(r.parameter),
+    vulnerabilityClass: String(r.vulnerability_class),
+    status: String(r.status) as WebCoverageRecord['status'],
+    source: String(r.source),
+    notes: r.notes ? String(r.notes) : undefined,
+    attempts: Number(r.attempts),
+    firstSeenAt: String(r.first_seen_at),
+    lastSeenAt: String(r.last_seen_at),
   };
 }

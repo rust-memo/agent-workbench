@@ -33,6 +33,75 @@ export interface ScopeDefinition {
   };
 }
 
+export type ScannerLimits = ScopeDefinition['limits'];
+
+export type ActionRisk = 'medium' | 'high';
+export type ActionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'expired';
+
+export interface ActionProposalRecord {
+  id: string;
+  engagementId: string;
+  sessionId: string;
+  turnId?: string;
+  action: 'katana' | 'nuclei';
+  arguments: Record<string, unknown>;
+  reason: string;
+  risk: ActionRisk;
+  scopeVersion: number;
+  approvalHash: string;
+  status: ActionStatus;
+  expiresAt: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  consumedAt?: string;
+  resultArtifactId?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type FindingSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
+export type FindingStatus = 'needs_validation' | 'confirmed' | 'false_positive' | 'informational';
+
+export interface WebFindingRecord {
+  id: string;
+  engagementId: string;
+  sessionId: string;
+  actionProposalId?: string;
+  evidenceArtifactId: string;
+  title: string;
+  severity: FindingSeverity;
+  status: FindingStatus;
+  confidence: 'scanner';
+  url: string;
+  scanner: 'nuclei';
+  scannerReference: string;
+  description?: string;
+  remediation?: string;
+  validationArtifactId?: string;
+  validationNote?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CoverageStatus = 'untested' | 'tried' | 'passed' | 'failed' | 'waf-blocked' | 'skipped';
+
+export interface WebCoverageRecord {
+  id: string;
+  engagementId: string;
+  sessionId: string;
+  asset: string;
+  endpoint: string;
+  parameter: string;
+  vulnerabilityClass: string;
+  status: CoverageStatus;
+  source: string;
+  notes?: string;
+  attempts: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
 export interface RuntimeEvent<T = unknown> {
   seq: number;
   eventId: string;

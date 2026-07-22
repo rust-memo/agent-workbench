@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  type ActionProposal,
   type Artifact,
+  type CoverageResponse,
   type Engagement,
+  type Finding,
   type RuntimeEvent,
   type Session,
   type SlashCommand,
@@ -20,6 +23,9 @@ function App(): React.ReactElement {
   const [selected, setSelected] = useState('');
   const [events, setEvents] = useState<RuntimeEvent[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [proposals, setProposals] = useState<ActionProposal[]>([]);
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [coverage, setCoverage] = useState<CoverageResponse>({ summary: {}, rows: [] });
   const [status, setStatus] = useState<WorkbenchStatus | null>(null);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [providerDraft, setProviderDraft] = useState<Session['provider']>('qwen');
@@ -30,6 +36,19 @@ function App(): React.ReactElement {
   const [error, setError] = useState('');
   const [clearedThrough, setClearedThrough] = useState<Record<string, number>>({});
   const lastSeq = useRef(0);
+
+  const refreshSessionData = useCallback(async (sessionId: string) => {
+    const [files, actions, nextFindings, nextCoverage] = await Promise.all([
+      api<Artifact[]>(`/sessions/${sessionId}/artifacts`),
+      api<ActionProposal[]>(`/sessions/${sessionId}/actions`),
+      api<Finding[]>(`/sessions/${sessionId}/findings`),
+      api<CoverageResponse>(`/sessions/${sessionId}/coverage`),
+    ]);
+    setArtifacts(files);
+    setProposals(actions);
+    setFindings(nextFindings);
+    setCoverage(nextCoverage);
+  }, []);
 
   const refresh = useCallback(async () => {
     const [nextEngagements, nextSessions, nextStatus, nextCommands] = await Promise.all([
@@ -77,10 +96,20 @@ function App(): React.ReactElement {
             ? current
             : [...current.slice(-999), event],
         );
-        if (event.type === 'artifact.saved' && (!selected || event.sessionId === selected)) {
-          void api<Artifact[]>(`/sessions/${event.sessionId}/artifacts`).then(setArtifacts);
+        if (
+          (event.type === 'artifact.saved' ||
+            event.type.startsWith('action.') ||
+            event.type.startsWith('finding.')) &&
+          (!selected || event.sessionId === selected)
+        ) {
+          void refreshSessionData(event.sessionId);
         }
-        if (event.type === 'turn.finished') {
+        if (
+          event.type === 'turn.finished' ||
+          event.type === 'action.completed' ||
+          event.type === 'action.failed' ||
+          event.type === 'action.cancelled'
+        ) {
           setCancellingSession((current) => (current === event.sessionId ? '' : current));
           void refresh();
         }
@@ -95,24 +124,26 @@ function App(): React.ReactElement {
       if (timer) clearTimeout(timer);
       socket?.close();
     };
-  }, [auth, refresh, selected]);
+  }, [auth, refresh, refreshSessionData, selected]);
 
   useEffect(() => {
     if (!selected || auth !== 'ready') {
       setArtifacts([]);
+      setProposals([]);
+      setFindings([]);
+      setCoverage({ summary: {}, rows: [] });
       return;
     }
     void Promise.all([
       api<RuntimeEvent[]>(`/events?after=0&sessionId=${encodeURIComponent(selected)}`),
-      api<Artifact[]>(`/sessions/${selected}/artifacts`),
+      refreshSessionData(selected),
     ])
-      .then(([history, files]) => {
+      .then(([history]) => {
         setEvents(history);
-        setArtifacts(files);
         lastSeq.current = Math.max(lastSeq.current, ...history.map((event) => event.seq), 0);
       })
       .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
-  }, [selected, auth]);
+  }, [selected, auth, refreshSessionData]);
 
   const activeSession = sessions.find((session) => session.id === selected);
   const activeEngagement = engagements.find(
@@ -256,6 +287,52 @@ function App(): React.ReactElement {
     }
   };
 
+  const approveAction = async (proposal: ActionProposal): Promise<void> => {
+    if (!selected || proposal.status !== 'pending') return;
+    const detail = JSON.stringify(proposal.arguments, null, 2);
+    if (
+      !window.confirm(
+        `Approve one ${proposal.risk}-risk ${proposal.action} action?\n\nReason: ${proposal.reason}\n\nExact arguments:\n${detail}`,
+      )
+    )
+      return;
+    try {
+      await api(`/sessions/${selected}/actions/${proposal.id}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ approvalHash: proposal.approvalHash }),
+      });
+      await Promise.all([refresh(), refreshSessionData(selected)]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const updateFinding = async (finding: Finding, status: Finding['status']): Promise<void> => {
+    if (!selected) return;
+    let validationArtifactId: string | undefined;
+    let validationNote: string | undefined;
+    if (status === 'confirmed') {
+      validationArtifactId = window
+        .prompt('Artifact UUID containing manual request/response proof')
+        ?.trim();
+      if (!validationArtifactId) return;
+      validationNote = window.prompt('Validation note (what was reproduced and observed)')?.trim();
+      if (!validationNote || validationNote.length < 10) {
+        setError('A validation note of at least 10 characters is required.');
+        return;
+      }
+    }
+    try {
+      await api(`/sessions/${selected}/findings/${finding.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status, validationArtifactId, validationNote }),
+      });
+      await refreshSessionData(selected);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
   if (auth === 'loading')
     return (
       <Centered title="Starting secure workbench…" detail="Restoring the local browser session." />
@@ -276,7 +353,7 @@ function App(): React.ReactElement {
           <span className="brand-mark">AW</span>
           <div>
             <strong>Agent Workbench</strong>
-            <small>Local AI Security Workbench · v0.2.2</small>
+            <small>Local AI Security Workbench · v0.3.0</small>
           </div>
         </div>
         <div className="provider-switcher">
@@ -404,7 +481,7 @@ function App(): React.ReactElement {
               disabled={cancellingSession === selected}
               onClick={() => void cancelTurn()}
             >
-              {cancellingSession === selected ? 'Cancelling…' : 'Cancel turn'}
+              {cancellingSession === selected ? 'Cancelling…' : 'Cancel operation'}
             </button>
           )}
         </div>
@@ -475,6 +552,78 @@ function App(): React.ReactElement {
 
       <aside className="inspector">
         <div className="section-title">
+          <span>Approvals</span>
+          <span className="count">
+            {proposals.filter((item) => item.status === 'pending').length}
+          </span>
+        </div>
+        <div className="approval-list">
+          {proposals.slice(0, 6).map((proposal) => (
+            <article className={`approval-card ${proposal.risk}`} key={proposal.id}>
+              <div>
+                <strong>{proposal.action}</strong>
+                <span>
+                  {proposal.risk} · {proposal.status}
+                </span>
+              </div>
+              <p>{proposal.reason}</p>
+              <code>{proposal.approvalHash.slice(0, 14)}…</code>
+              {proposal.status === 'pending' && (
+                <button type="button" onClick={() => void approveAction(proposal)}>
+                  Review & approve once
+                </button>
+              )}
+              {proposal.error && <small>{proposal.error}</small>}
+            </article>
+          ))}
+          {proposals.length === 0 && (
+            <div className="empty compact">Katana and Nuclei proposals appear here.</div>
+          )}
+        </div>
+        <div className="section-title inspector-gap">
+          <span>Findings</span>
+          <span className="count">{findings.length}</span>
+        </div>
+        <div className="finding-list">
+          {findings.slice(0, 8).map((finding) => (
+            <article className="finding-card" key={finding.id}>
+              <div>
+                <span className={`severity ${finding.severity}`}>{finding.severity}</span>
+                <strong>{finding.title}</strong>
+              </div>
+              <code>{finding.scannerReference}</code>
+              <small>{finding.url}</small>
+              <select
+                aria-label={`Status for ${finding.title}`}
+                value={finding.status}
+                onChange={(event) =>
+                  void updateFinding(finding, event.target.value as Finding['status'])
+                }
+              >
+                <option value="needs_validation">Needs validation</option>
+                <option value="confirmed">Confirmed manually</option>
+                <option value="false_positive">False positive</option>
+                <option value="informational">Informational</option>
+              </select>
+            </article>
+          ))}
+          {findings.length === 0 && (
+            <div className="empty compact">Scanner hits stay unconfirmed until validation.</div>
+          )}
+        </div>
+        <div className="section-title inspector-gap">
+          <span>Coverage</span>
+          <span className="count">{coverage.summary.total ?? 0}</span>
+        </div>
+        <div className="coverage-summary">
+          {['untested', 'tried', 'passed', 'failed', 'skipped'].map((key) => (
+            <span key={key}>
+              <strong>{coverage.summary[key] ?? 0}</strong>
+              {key}
+            </span>
+          ))}
+        </div>
+        <div className="section-title">
           <span>Artifacts</span>
           <span className="count">{artifacts.length}</span>
         </div>
@@ -489,7 +638,7 @@ function App(): React.ReactElement {
         <div className="security-note">
           <span>SECURITY BOUNDARY</span>
           <p>
-            Web tools cannot run arbitrary shell commands. v0.2.2 uses validated inputs and
+            Docker scanners use fixed images and arguments, no host mounts or credentials, and
             best-effort network scope enforcement.
           </p>
         </div>

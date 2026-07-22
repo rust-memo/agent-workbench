@@ -5,7 +5,7 @@ const port = rawPort ? Number.parseInt(rawPort, 10) : 9099;
 
 try {
   const handle = await startWebServer({ port });
-  process.stdout.write(`Agent Workbench v0.2.2 is listening on http://127.0.0.1:${handle.port}\n`);
+  process.stdout.write(`Agent Workbench v0.3.0 is listening on http://127.0.0.1:${handle.port}\n`);
   process.stdout.write(`Open this single-use pairing URL:\n${handle.pairingURL}\n`);
   const stop = async (): Promise<void> => {
     await handle.close();

@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import type { Prompter } from '../../permission/permission.js';
 import type { Tool } from '../../tools/types.js';
-import type { LocalScannerRunner } from '../scanners/localRunner.js';
+import type { ActionService } from '../actions/service.js';
+import type { DockerScannerRunner } from '../scanners/dockerRunner.js';
 import { classifyDiscoveredValue, hostInScope, normalizeHost } from '../scope.js';
 import type { ArtifactStore } from '../storage/artifacts.js';
 import type { WebDatabase } from '../storage/database.js';
@@ -63,7 +64,7 @@ export class ScopeTargetsTool implements Tool {
 export class SubfinderTool implements Tool {
   constructor(
     private readonly context: ReconToolContext,
-    private readonly runner: LocalScannerRunner,
+    private readonly runner: DockerScannerRunner,
     private readonly artifacts: ArtifactStore,
   ) {}
   name(): string {
@@ -138,7 +139,7 @@ export class SubfinderTool implements Tool {
 export class HttpxTool implements Tool {
   constructor(
     private readonly context: ReconToolContext,
-    private readonly runner: LocalScannerRunner,
+    private readonly runner: DockerScannerRunner,
     private readonly artifacts: ArtifactStore,
     private readonly database: WebDatabase,
   ) {}
@@ -246,5 +247,263 @@ export class HttpxTool implements Tool {
       targets: targets.length,
       observations: observations.length,
     });
+  }
+}
+
+export class DnsxTool implements Tool {
+  constructor(
+    private readonly context: ReconToolContext,
+    private readonly runner: DockerScannerRunner,
+    private readonly artifacts: ArtifactStore,
+    private readonly database: WebDatabase,
+  ) {}
+  name(): string {
+    return 'dnsx';
+  }
+  description(): string {
+    return 'Resolve only active-testing-authorized hosts from a server-owned discovery artifact using the isolated Docker scanner.';
+  }
+  schema(): Record<string, unknown> {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      required: ['inputArtifactId'],
+      properties: { inputArtifactId: { type: 'string', format: 'uuid' } },
+    };
+  }
+  requiresPermission(): boolean {
+    return false;
+  }
+  async run(args: Record<string, unknown>, signal: AbortSignal): Promise<string> {
+    const { inputArtifactId } = z
+      .object({ inputArtifactId: z.string().uuid() })
+      .strict()
+      .parse(args);
+    const scope = this.context.scope();
+    if (!scope.allowDirectLowImpactRecon)
+      throw new Error('direct low-impact recon is disabled for this engagement');
+    const source = this.database.getArtifact(inputArtifactId);
+    if (!source || source.sessionId !== this.context.sessionId)
+      throw new Error('input artifact was not found in this session');
+    let values: unknown;
+    try {
+      values = JSON.parse(this.artifacts.read(source).toString('utf8'));
+    } catch {
+      throw new Error('input artifact is not valid discovery JSON');
+    }
+    const targets = z
+      .array(
+        z
+          .object({ host: z.string(), inScope: z.boolean(), activeTestingAllowed: z.boolean() })
+          .passthrough(),
+      )
+      .max(100_000)
+      .parse(values)
+      .filter(
+        (asset) => asset.inScope && asset.activeTestingAllowed && hostInScope(asset.host, scope),
+      )
+      .slice(0, scope.limits.maxUrlsPerHost)
+      .map((asset) => asset.host);
+    if (!targets.length)
+      throw new Error('input artifact contains no hosts authorized for DNS recon');
+    const result = await this.runner.dnsx(targets, scope.limits, signal);
+    if (result.exitCode !== 0)
+      throw new Error(`dnsx exited ${result.exitCode}: ${result.stderr.slice(0, 1000)}`);
+    const rows = result.stdout
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line) as Record<string, unknown>];
+        } catch {
+          return [];
+        }
+      });
+    const artifact = await this.artifacts.save({
+      engagementId: this.context.engagementId,
+      sessionId: this.context.sessionId,
+      turnId: this.context.turnId(),
+      kind: 'dns-observations',
+      filename: 'dnsx-results.json',
+      mediaType: 'application/json',
+      body: `${JSON.stringify(rows, null, 2)}\n`,
+      metadata: { tool: 'dnsx', targets: targets.length, scannerIsolation: 'docker' },
+    });
+    for (const host of targets) {
+      this.database.upsertCoverage({
+        engagementId: this.context.engagementId,
+        sessionId: this.context.sessionId,
+        asset: host,
+        endpoint: `DNS ${host}`,
+        parameter: 'A/AAAA',
+        vulnerabilityClass: 'dns-resolution',
+        status: 'tried',
+        source: 'dnsx',
+      });
+    }
+    return JSON.stringify({
+      artifactId: artifact.id,
+      targets: targets.length,
+      observations: rows.length,
+    });
+  }
+}
+
+export class KatanaProposalTool implements Tool {
+  constructor(
+    private readonly context: ReconToolContext,
+    private readonly actions: ActionService,
+  ) {}
+  name(): string {
+    return 'katana';
+  }
+  description(): string {
+    return 'Propose an approval-gated, scoped Katana crawl. This tool never executes the crawler itself.';
+  }
+  schema(): Record<string, unknown> {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      required: ['inputArtifactId', 'reason'],
+      properties: {
+        inputArtifactId: { type: 'string', format: 'uuid' },
+        depth: { type: 'integer', minimum: 1, maximum: 3, default: 2 },
+        reason: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    };
+  }
+  requiresPermission(): boolean {
+    return false;
+  }
+  async run(args: Record<string, unknown>): Promise<string> {
+    const parsed = z
+      .object({
+        inputArtifactId: z.string().uuid(),
+        depth: z.number().int().min(1).max(3).default(2),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .strict()
+      .parse(args);
+    const scope = this.context.scope();
+    const proposal = this.actions.propose({
+      engagementId: this.context.engagementId,
+      sessionId: this.context.sessionId,
+      turnId: this.context.turnId(),
+      action: 'katana',
+      arguments: { inputArtifactId: parsed.inputArtifactId, depth: parsed.depth },
+      reason: parsed.reason,
+      scopeVersion: scope.version,
+      mode: 'RECON',
+    });
+    return JSON.stringify({
+      proposalId: proposal.id,
+      status: proposal.status,
+      risk: proposal.risk,
+      expiresAt: proposal.expiresAt,
+      approvalRequired: true,
+    });
+  }
+}
+
+export class NucleiProposalTool implements Tool {
+  constructor(
+    private readonly context: ReconToolContext,
+    private readonly actions: ActionService,
+  ) {}
+  name(): string {
+    return 'nuclei';
+  }
+  description(): string {
+    return 'Propose an approval-gated Nuclei scan using only the pinned safe HTTP template set. Scanner hits are never auto-confirmed.';
+  }
+  schema(): Record<string, unknown> {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      required: ['inputArtifactId', 'reason'],
+      properties: {
+        inputArtifactId: { type: 'string', format: 'uuid' },
+        severities: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 5,
+          uniqueItems: true,
+          items: { type: 'string', enum: ['info', 'low', 'medium', 'high', 'critical'] },
+        },
+        reason: { type: 'string', minLength: 1, maxLength: 500 },
+      },
+    };
+  }
+  requiresPermission(): boolean {
+    return false;
+  }
+  async run(args: Record<string, unknown>): Promise<string> {
+    const parsed = z
+      .object({
+        inputArtifactId: z.string().uuid(),
+        severities: z
+          .array(z.enum(['info', 'low', 'medium', 'high', 'critical']))
+          .min(1)
+          .max(5)
+          .default(['low', 'medium', 'high', 'critical']),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .strict()
+      .parse(args);
+    const scope = this.context.scope();
+    const proposal = this.actions.propose({
+      engagementId: this.context.engagementId,
+      sessionId: this.context.sessionId,
+      turnId: this.context.turnId(),
+      action: 'nuclei',
+      arguments: {
+        inputArtifactId: parsed.inputArtifactId,
+        severities: [...new Set(parsed.severities)],
+      },
+      reason: parsed.reason,
+      scopeVersion: scope.version,
+      mode: 'RECON',
+    });
+    return JSON.stringify({
+      proposalId: proposal.id,
+      status: proposal.status,
+      risk: proposal.risk,
+      expiresAt: proposal.expiresAt,
+      approvalRequired: true,
+    });
+  }
+}
+
+export class WebCoverageTool implements Tool {
+  constructor(
+    private readonly context: ReconToolContext,
+    private readonly database: WebDatabase,
+  ) {}
+  name(): string {
+    return 'coverage';
+  }
+  description(): string {
+    return 'Read the persistent Web coverage summary or list; scanner actions update it automatically.';
+  }
+  schema(): Record<string, unknown> {
+    return {
+      type: 'object',
+      additionalProperties: false,
+      properties: { action: { type: 'string', enum: ['summary', 'list'], default: 'summary' } },
+    };
+  }
+  requiresPermission(): boolean {
+    return false;
+  }
+  async run(args: Record<string, unknown>): Promise<string> {
+    const { action } = z
+      .object({ action: z.enum(['summary', 'list']).default('summary') })
+      .strict()
+      .parse(args);
+    return JSON.stringify(
+      action === 'list'
+        ? this.database.listCoverage(this.context.sessionId).slice(0, 500)
+        : this.database.coverageSummary(this.context.sessionId),
+    );
   }
 }

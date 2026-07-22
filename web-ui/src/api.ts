@@ -59,6 +59,42 @@ export interface Artifact {
   status: string;
   createdAt: string;
 }
+export interface ActionProposal {
+  id: string;
+  sessionId: string;
+  action: 'katana' | 'nuclei';
+  arguments: Record<string, unknown>;
+  reason: string;
+  risk: 'medium' | 'high';
+  approvalHash: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'expired';
+  expiresAt: string;
+  resultArtifactId?: string;
+  error?: string;
+}
+export interface Finding {
+  id: string;
+  title: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  status: 'needs_validation' | 'confirmed' | 'false_positive' | 'informational';
+  url: string;
+  scanner: 'nuclei';
+  scannerReference: string;
+}
+export interface CoverageRow {
+  id: string;
+  asset: string;
+  endpoint: string;
+  parameter: string;
+  vulnerabilityClass: string;
+  status: 'untested' | 'tried' | 'passed' | 'failed' | 'waf-blocked' | 'skipped';
+  source: string;
+  attempts: number;
+}
+export interface CoverageResponse {
+  summary: Record<string, number>;
+  rows: CoverageRow[];
+}
 
 let csrfToken = '';
 
