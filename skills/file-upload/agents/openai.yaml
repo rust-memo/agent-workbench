@@ -1,0 +1,4 @@
+interface:
+  display_name: "File Upload"
+  short_description: "Review upload validation, storage, and delivery"
+  default_prompt: "Use $file-upload to plan safe evidence-driven testing for this authorized scope."

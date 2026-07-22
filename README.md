@@ -16,7 +16,7 @@ control.
 [![license: Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![stars](https://img.shields.io/github/stars/rust-memo/agent-workbench?style=social)](https://github.com/rust-memo/agent-workbench/stargazers)
 
-**[Install](#install) · [Web Workbench](#local-web-workbench-v032) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
+**[Install](#install) · [Web Workbench](#local-web-workbench-v050) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
 
 </div>
 
@@ -112,7 +112,7 @@ irm https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.ps1
 Pin a release or choose an install directory:
 
 ```sh
-PENTESTERFLOW_VERSION=v0.4.0 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
+PENTESTERFLOW_VERSION=v0.5.0 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh)"
 ```
 
@@ -153,7 +153,7 @@ pentesterflow --resume <session-id>
 On resume, PentesterFlow automatically shows a recap of the previous session's
 persistent memory so you can continue without manually reconstructing context.
 
-## Local Web Workbench (v0.4.0)
+## Local Web Workbench (v0.5.0)
 
 The Web workbench keeps the existing CLI intact and adds an English-only,
 terminal-style local interface. Web sessions use SQLite as their only source of
@@ -183,12 +183,24 @@ Open the single-use pairing URL printed in the terminal. The fragment is
 exchanged for an HttpOnly, SameSite=Strict session cookie and is removed from
 the browser address bar immediately.
 
-v0.4.0 includes general assistance, Plan and low-impact Recon modes, an
+v0.5.0 introduces a Recon-first workspace with a scope form, Quick/Standard/Advanced
+profiles, persisted step-by-step runs, ranked live assets, manual-test recommendations,
+and a compact audit terminal. A run moves through Scope, optional passive discovery,
+DNS, HTTP probing, and deterministic analysis. Standard and Advanced profiles create
+single-use approval proposals for deeper scanners; they never run those actions silently.
+
+The Web skill catalog now loads the inherited PentesterFlow skills plus curated
+API authorization, OAuth/OIDC, business-logic, request-smuggling, and file-upload
+playbooks. Each new playbook exposes provenance, a pinned source commit, license,
+risk, and Web/CLI compatibility. Loading a skill adds it to the next agent turn;
+it does not add shell access to the restricted Web runtime.
+
+The workbench also includes general assistance, Plan and low-impact Recon modes, an
 Ollama/Qwen Code/Codex CLI/Claude CLI/OpenCode/OpenClaude provider and checked-model switcher,
 Subfinder, DNSX, HTTPX, Katana, Nuclei, FFUF, Nmap connect scanning, an opt-in
 raw-socket Nmap profile, SQLite event replay, cancellation,
 hash-addressed artifacts, approval proposals, Findings, and Coverage. The
-safe scanners run in an ephemeral `agent-workbench-scanner-safe:0.4.0` container.
+safe scanners run in an ephemeral `agent-workbench-scanner-safe:0.5.0` container.
 The server owns the image, entrypoint, flags, network mode, resource limits,
 user, and capabilities; targets are sent through stdin. Safe scanner containers
 are read-only, non-root, capability-free, `no-new-privileges`, resource-limited,
@@ -211,7 +223,7 @@ available through the Web action. Scanner matches are stored as
 confirmation is explicit and audited.
 
 Nmap connect scanning uses the non-raw safe image. SYN scanning is isolated in
-`agent-workbench-scanner-raw:0.4.0`, disabled by default, never uses
+`agent-workbench-scanner-raw:0.5.0`, disabled by default, never uses
 `--privileged`, and receives only `NET_RAW` after starting the server with
 `PENTESTERFLOW_ENABLE_RAW_SCANNER=1`. FFUF uses the server-owned bounded
 wordlist, request limits, and fixed argument builder; the model cannot choose a

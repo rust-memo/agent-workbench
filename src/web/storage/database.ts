@@ -7,6 +7,12 @@ import type {
   ArtifactRecord,
   CoverageStatus,
   FindingStatus,
+  ReconInsightRecord,
+  ReconProfile,
+  ReconRunRecord,
+  ReconRunStatus,
+  ReconStepRecord,
+  ReconStepStatus,
   RuntimeEvent,
   ScopeDefinition,
   WebCoverageRecord,
@@ -196,6 +202,52 @@ export class WebDatabase {
         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         imported_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS recon_runs (
+        id TEXT PRIMARY KEY,
+        engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        profile TEXT NOT NULL CHECK(profile IN ('quick','standard','advanced')),
+        status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed','cancelled')),
+        current_step TEXT,
+        progress INTEGER NOT NULL DEFAULT 0,
+        summary_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS recon_runs_session_created
+        ON recon_runs(session_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS recon_steps (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES recon_runs(id) ON DELETE CASCADE,
+        ordinal INTEGER NOT NULL,
+        step_key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending','running','completed','skipped','failed','cancelled')),
+        artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL,
+        detail TEXT,
+        metrics_json TEXT NOT NULL DEFAULT '{}',
+        started_at TEXT,
+        completed_at TEXT,
+        UNIQUE(run_id, step_key)
+      );
+      CREATE TABLE IF NOT EXISTS recon_insights (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES recon_runs(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        type TEXT NOT NULL CHECK(type IN ('asset','signal','recommendation','manual-test')),
+        priority TEXT NOT NULL CHECK(priority IN ('critical','high','medium','low','info')),
+        title TEXT NOT NULL,
+        rationale TEXT NOT NULL,
+        target TEXT,
+        skill TEXT,
+        status TEXT NOT NULL CHECK(status IN ('new','accepted','dismissed','completed')),
+        source_step TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS recon_insights_run_priority
+        ON recon_insights(run_id, priority, created_at DESC);
     `);
     this.migrateActionProposalActions();
     const sessionColumns = this.db.prepare('PRAGMA table_info(sessions)').all() as Array<{
@@ -214,7 +266,7 @@ export class WebDatabase {
     // A process died while running these turns; do not present them as live
     // after restart and never preserve an in-memory approval implicitly.
     this.db.exec(
-      "UPDATE sessions SET state = 'error' WHERE state = 'running'; UPDATE turns SET status = 'error', completed_at = datetime('now') WHERE status = 'running'; UPDATE action_proposals SET status = 'failed', error = 'server restarted during execution', updated_at = datetime('now') WHERE status = 'running';",
+      "UPDATE sessions SET state = 'error' WHERE state = 'running'; UPDATE turns SET status = 'error', completed_at = datetime('now') WHERE status = 'running'; UPDATE action_proposals SET status = 'failed', error = 'server restarted during execution', updated_at = datetime('now') WHERE status = 'running'; UPDATE recon_runs SET status = 'failed', completed_at = datetime('now'), summary_json = '{\"error\":\"server restarted during recon\"}' WHERE status IN ('queued','running'); UPDATE recon_steps SET status = 'failed', detail = 'server restarted during recon', completed_at = datetime('now') WHERE status = 'running';",
     );
   }
 
@@ -691,6 +743,192 @@ export class WebDatabase {
     return summary;
   }
 
+  createReconRun(
+    sessionId: string,
+    engagementId: string,
+    profile: ReconProfile,
+    steps: Array<{ key: string; label: string }>,
+  ): ReconRunRecord {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO recon_runs
+          (id, engagement_id, session_id, profile, status, progress, summary_json, created_at)
+          VALUES (?, ?, ?, ?, 'queued', 0, '{}', ?)`,
+        )
+        .run(id, engagementId, sessionId, profile, now);
+      const insert = this.db.prepare(
+        `INSERT INTO recon_steps
+        (id, run_id, ordinal, step_key, label, status, metrics_json)
+        VALUES (?, ?, ?, ?, ?, 'pending', '{}')`,
+      );
+      steps.forEach((step, ordinal) => insert.run(randomUUID(), id, ordinal, step.key, step.label));
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    const run = this.getReconRun(id);
+    if (!run) throw new Error('recon run was not created');
+    return run;
+  }
+
+  getReconRun(id: string): ReconRunRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM recon_runs WHERE id = ?').get(id) as
+      | SqlRow
+      | undefined;
+    return row
+      ? reconRunFromRow(row, this.listReconSteps(id), this.listReconInsights(id))
+      : undefined;
+  }
+
+  listReconRuns(sessionId: string): ReconRunRecord[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM recon_runs WHERE session_id = ? ORDER BY created_at DESC')
+        .all(sessionId) as SqlRow[]
+    ).map((row) => {
+      const id = String(row.id);
+      return reconRunFromRow(row, this.listReconSteps(id), this.listReconInsights(id));
+    });
+  }
+
+  startReconRun(id: string): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        "UPDATE recon_runs SET status = 'running', started_at = ?, current_step = NULL WHERE id = ? AND status = 'queued'",
+      )
+      .run(now, id);
+  }
+
+  updateReconStep(
+    runId: string,
+    key: string,
+    status: ReconStepStatus,
+    input: {
+      artifactId?: string;
+      detail?: string;
+      metrics?: Record<string, unknown>;
+    } = {},
+  ): ReconStepRecord {
+    const now = new Date().toISOString();
+    const startedAt = status === 'running' ? now : undefined;
+    const completedAt = ['completed', 'skipped', 'failed', 'cancelled'].includes(status)
+      ? now
+      : undefined;
+    this.db
+      .prepare(
+        `UPDATE recon_steps SET status = ?, artifact_id = COALESCE(?, artifact_id),
+         detail = COALESCE(?, detail), metrics_json = ?,
+         started_at = COALESCE(?, started_at), completed_at = COALESCE(?, completed_at)
+         WHERE run_id = ? AND step_key = ?`,
+      )
+      .run(
+        status,
+        input.artifactId ?? null,
+        input.detail ?? null,
+        JSON.stringify(input.metrics ?? {}),
+        startedAt ?? null,
+        completedAt ?? null,
+        runId,
+        key,
+      );
+    const steps = this.listReconSteps(runId);
+    const step = steps.find((item) => item.key === key);
+    if (!step) throw new Error('recon step not found');
+    const finished = steps.filter((item) =>
+      ['completed', 'skipped', 'failed', 'cancelled'].includes(item.status),
+    ).length;
+    this.db
+      .prepare('UPDATE recon_runs SET current_step = ?, progress = ? WHERE id = ?')
+      .run(status === 'running' ? key : null, Math.round((finished / steps.length) * 100), runId);
+    return step;
+  }
+
+  finishReconRun(
+    id: string,
+    status: Extract<ReconRunStatus, 'completed' | 'failed' | 'cancelled'>,
+    summary: Record<string, unknown>,
+  ): void {
+    this.db
+      .prepare(
+        "UPDATE recon_runs SET status = ?, current_step = NULL, progress = CASE WHEN ? = 'completed' THEN 100 ELSE progress END, summary_json = ?, completed_at = ? WHERE id = ?",
+      )
+      .run(status, status, JSON.stringify(summary), new Date().toISOString(), id);
+  }
+
+  addReconInsight(
+    input: Omit<ReconInsightRecord, 'id' | 'status' | 'createdAt' | 'updatedAt'>,
+  ): ReconInsightRecord {
+    const now = new Date().toISOString();
+    const record: ReconInsightRecord = {
+      ...input,
+      id: randomUUID(),
+      status: 'new',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO recon_insights
+        (id, run_id, session_id, type, priority, title, rationale, target, skill, status, source_step, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.runId,
+        record.sessionId,
+        record.type,
+        record.priority,
+        record.title,
+        record.rationale,
+        record.target ?? null,
+        record.skill ?? null,
+        record.status,
+        record.sourceStep ?? null,
+        now,
+        now,
+      );
+    return record;
+  }
+
+  updateReconInsight(
+    id: string,
+    sessionId: string,
+    status: ReconInsightRecord['status'],
+  ): ReconInsightRecord {
+    const result = this.db
+      .prepare(
+        'UPDATE recon_insights SET status = ?, updated_at = ? WHERE id = ? AND session_id = ?',
+      )
+      .run(status, new Date().toISOString(), id, sessionId);
+    if (Number(result.changes) !== 1) throw new Error('recon insight not found');
+    const row = this.db.prepare('SELECT * FROM recon_insights WHERE id = ?').get(id) as SqlRow;
+    return reconInsightFromRow(row);
+  }
+
+  private listReconSteps(runId: string): ReconStepRecord[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM recon_steps WHERE run_id = ? ORDER BY ordinal')
+        .all(runId) as SqlRow[]
+    ).map(reconStepFromRow);
+  }
+
+  private listReconInsights(runId: string): ReconInsightRecord[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT * FROM recon_insights WHERE run_id = ? ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, created_at DESC",
+        )
+        .all(runId) as SqlRow[]
+    ).map(reconInsightFromRow);
+  }
+
   getLegacyImport(sourceSha256: string): { sessionId: string; importedAt: string } | undefined {
     const row = this.db
       .prepare('SELECT session_id, imported_at FROM legacy_imports WHERE source_sha256 = ?')
@@ -753,6 +991,7 @@ export class WebDatabase {
       actions: this.listActionProposals(sessionId),
       findings: this.listFindings(sessionId),
       coverage: this.listCoverage(sessionId),
+      reconRuns: this.listReconRuns(sessionId),
     };
   }
 
@@ -760,6 +999,13 @@ export class WebDatabase {
     if (!this.getSession(sessionId)) throw new Error('session not found');
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      this.db.prepare('DELETE FROM recon_insights WHERE session_id = ?').run(sessionId);
+      this.db
+        .prepare(
+          'DELETE FROM recon_steps WHERE run_id IN (SELECT id FROM recon_runs WHERE session_id = ?)',
+        )
+        .run(sessionId);
+      this.db.prepare('DELETE FROM recon_runs WHERE session_id = ?').run(sessionId);
       this.db.prepare('DELETE FROM findings WHERE session_id = ?').run(sessionId);
       this.db.prepare('DELETE FROM coverage WHERE session_id = ?').run(sessionId);
       this.db.prepare('DELETE FROM action_proposals WHERE session_id = ?').run(sessionId);
@@ -891,5 +1137,61 @@ function coverageFromRow(r: SqlRow): WebCoverageRecord {
     attempts: Number(r.attempts),
     firstSeenAt: String(r.first_seen_at),
     lastSeenAt: String(r.last_seen_at),
+  };
+}
+
+function reconRunFromRow(
+  r: SqlRow,
+  steps: ReconStepRecord[],
+  insights: ReconInsightRecord[],
+): ReconRunRecord {
+  return {
+    id: String(r.id),
+    engagementId: String(r.engagement_id),
+    sessionId: String(r.session_id),
+    profile: String(r.profile) as ReconProfile,
+    status: String(r.status) as ReconRunStatus,
+    currentStep: r.current_step ? String(r.current_step) : undefined,
+    progress: Number(r.progress),
+    summary: JSON.parse(String(r.summary_json)),
+    createdAt: String(r.created_at),
+    startedAt: r.started_at ? String(r.started_at) : undefined,
+    completedAt: r.completed_at ? String(r.completed_at) : undefined,
+    steps,
+    insights,
+  };
+}
+
+function reconStepFromRow(r: SqlRow): ReconStepRecord {
+  return {
+    id: String(r.id),
+    runId: String(r.run_id),
+    ordinal: Number(r.ordinal),
+    key: String(r.step_key),
+    label: String(r.label),
+    status: String(r.status) as ReconStepStatus,
+    artifactId: r.artifact_id ? String(r.artifact_id) : undefined,
+    detail: r.detail ? String(r.detail) : undefined,
+    metrics: JSON.parse(String(r.metrics_json)),
+    startedAt: r.started_at ? String(r.started_at) : undefined,
+    completedAt: r.completed_at ? String(r.completed_at) : undefined,
+  };
+}
+
+function reconInsightFromRow(r: SqlRow): ReconInsightRecord {
+  return {
+    id: String(r.id),
+    runId: String(r.run_id),
+    sessionId: String(r.session_id),
+    type: String(r.type) as ReconInsightRecord['type'],
+    priority: String(r.priority) as ReconInsightRecord['priority'],
+    title: String(r.title),
+    rationale: String(r.rationale),
+    target: r.target ? String(r.target) : undefined,
+    skill: r.skill ? String(r.skill) : undefined,
+    status: String(r.status) as ReconInsightRecord['status'],
+    sourceStep: r.source_step ? String(r.source_step) : undefined,
+    createdAt: String(r.created_at),
+    updatedAt: String(r.updated_at),
   };
 }

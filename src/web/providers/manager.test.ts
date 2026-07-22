@@ -30,6 +30,21 @@ describe('Qwen model discovery', () => {
     ).toEqual(['vendor/current-model', 'vendor/second-model', 'provider/@cf/model']);
   });
 
+  it('accepts current and compatibility Qwen model fields', () => {
+    expect(
+      modelsFromQwenSettings({
+        model: 'vendor/string-active',
+        modelProviders: {
+          openai: [
+            { id: 'vendor/id' },
+            { model: 'vendor/model-field' },
+            { name: 'vendor/name-field' },
+          ],
+        },
+      }),
+    ).toEqual(['vendor/string-active', 'vendor/id', 'vendor/model-field', 'vendor/name-field']);
+  });
+
   it('ignores malformed and unsafe model identifiers', () => {
     expect(
       modelsFromQwenSettings({

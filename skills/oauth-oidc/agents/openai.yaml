@@ -1,0 +1,4 @@
+interface:
+  display_name: "OAuth and OIDC"
+  short_description: "Review login, callback, code, and token boundaries"
+  default_prompt: "Use $oauth-oidc to plan safe evidence-driven testing for this authorized scope."

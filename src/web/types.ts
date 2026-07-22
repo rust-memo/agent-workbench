@@ -135,3 +135,60 @@ export interface ArtifactRecord {
   metadata: Record<string, unknown>;
   createdAt: string;
 }
+
+export type ReconProfile = 'quick' | 'standard' | 'advanced';
+export type ReconRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type ReconStepStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'skipped'
+  | 'failed'
+  | 'cancelled';
+export type ReconPriority = 'critical' | 'high' | 'medium' | 'low' | 'info';
+
+export interface ReconStepRecord {
+  id: string;
+  runId: string;
+  ordinal: number;
+  key: string;
+  label: string;
+  status: ReconStepStatus;
+  artifactId?: string;
+  detail?: string;
+  metrics: Record<string, unknown>;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface ReconInsightRecord {
+  id: string;
+  runId: string;
+  sessionId: string;
+  type: 'asset' | 'signal' | 'recommendation' | 'manual-test';
+  priority: ReconPriority;
+  title: string;
+  rationale: string;
+  target?: string;
+  skill?: string;
+  status: 'new' | 'accepted' | 'dismissed' | 'completed';
+  sourceStep?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReconRunRecord {
+  id: string;
+  engagementId: string;
+  sessionId: string;
+  profile: ReconProfile;
+  status: ReconRunStatus;
+  currentStep?: string;
+  progress: number;
+  summary: Record<string, unknown>;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  steps: ReconStepRecord[];
+  insights: ReconInsightRecord[];
+}

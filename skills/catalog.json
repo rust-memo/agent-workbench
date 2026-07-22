@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "name": "api-authorization",
+      "category": "authorization",
+      "risk": "low",
+      "compatibility": ["cli", "web"],
+      "source": "https://github.com/OWASP/API-Security",
+      "sourceCommit": "e85ddfa5a936d4656840ac250c039c7057e66b0d",
+      "license": "CC-BY-SA-4.0",
+      "provenance": "Original project playbook informed by OWASP API Security risks and WSTG authorization testing guidance."
+    },
+    {
+      "name": "oauth-oidc",
+      "category": "identity",
+      "risk": "medium",
+      "compatibility": ["cli", "web"],
+      "source": "https://github.com/OWASP/wstg",
+      "sourceCommit": "c11a9509093fdf21fbacff4a100621732005be13",
+      "license": "CC-BY-SA-4.0",
+      "provenance": "Original project playbook informed by OWASP WSTG OAuth authorization-server and client test cases."
+    },
+    {
+      "name": "business-logic",
+      "category": "business-logic",
+      "risk": "medium",
+      "compatibility": ["cli", "web"],
+      "source": "https://github.com/OWASP/wstg",
+      "sourceCommit": "c11a9509093fdf21fbacff4a100621732005be13",
+      "license": "CC-BY-SA-4.0",
+      "provenance": "Original project playbook informed by OWASP WSTG business-logic testing topics."
+    },
+    {
+      "name": "request-smuggling",
+      "category": "http-desync",
+      "risk": "high",
+      "compatibility": ["cli", "web"],
+      "source": "https://github.com/PortSwigger/http-request-smuggler",
+      "sourceCommit": "a25814d258c501b59b7f561d816f4d787c61ab70",
+      "license": "Apache-2.0",
+      "provenance": "Original conservative workflow informed by PortSwigger request-smuggling research and tooling."
+    },
+    {
+      "name": "file-upload",
+      "category": "web",
+      "risk": "medium",
+      "compatibility": ["cli", "web"],
+      "source": "https://github.com/swisskyrepo/PayloadsAllTheThings",
+      "sourceCommit": "c142771628ecb898b35da26d37270770e457f0e0",
+      "license": "MIT",
+      "provenance": "Original safe workflow informed by public file-upload testing references; no payload corpus is bundled."
+    }
+  ]
+}

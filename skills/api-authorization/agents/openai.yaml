@@ -1,0 +1,4 @@
+interface:
+  display_name: "API Authorization"
+  short_description: "Test BOLA, IDOR, roles, and tenant boundaries"
+  default_prompt: "Use $api-authorization to plan safe evidence-driven testing for this authorized scope."

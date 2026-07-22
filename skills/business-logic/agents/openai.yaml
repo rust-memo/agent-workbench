@@ -1,0 +1,4 @@
+interface:
+  display_name: "Business Logic"
+  short_description: "Model workflows, limits, pricing, and state abuse"
+  default_prompt: "Use $business-logic to plan safe evidence-driven testing for this authorized scope."

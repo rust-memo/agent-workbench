@@ -3,8 +3,8 @@ import { execa } from 'execa';
 import type { ScannerLimits } from '../types.js';
 import { clean } from './output.js';
 
-export const SAFE_SCANNER_IMAGE = 'agent-workbench-scanner-safe:0.4.0';
-export const RAW_SCANNER_IMAGE = 'agent-workbench-scanner-raw:0.4.0';
+export const SAFE_SCANNER_IMAGE = 'agent-workbench-scanner-safe:0.5.0';
+export const RAW_SCANNER_IMAGE = 'agent-workbench-scanner-raw:0.5.0';
 
 export type ScannerName =
   | 'subfinder'

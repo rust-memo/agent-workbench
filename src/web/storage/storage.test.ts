@@ -148,6 +148,43 @@ describe.skipIf(!supportsNodeSqlite)('Web persistence', () => {
     database.close();
   });
 
+  it('persists staged recon progress, prioritized insights, and review status', async () => {
+    const { database, sessionId, engagementId } = await fixture();
+    const run = database.createReconRun(sessionId, engagementId, 'standard', [
+      { key: 'scope', label: 'Scope snapshot' },
+      { key: 'analysis', label: 'Analysis' },
+    ]);
+    database.startReconRun(run.id);
+    database.updateReconStep(run.id, 'scope', 'running');
+    database.updateReconStep(run.id, 'scope', 'completed', { metrics: { targets: 1 } });
+    const insight = database.addReconInsight({
+      runId: run.id,
+      sessionId,
+      type: 'manual-test',
+      priority: 'high',
+      title: 'Review authorization',
+      rationale: 'An API was discovered.',
+      skill: 'api-authorization',
+      sourceStep: 'analysis',
+    });
+    expect(database.updateReconInsight(insight.id, sessionId, 'accepted').status).toBe('accepted');
+    database.updateReconStep(run.id, 'analysis', 'completed', { metrics: { insights: 1 } });
+    database.finishReconRun(run.id, 'completed', { assets: 1 });
+    expect(database.listReconRuns(sessionId)[0]).toMatchObject({
+      id: run.id,
+      profile: 'standard',
+      status: 'completed',
+      progress: 100,
+      summary: { assets: 1 },
+      steps: [
+        { key: 'scope', status: 'completed', metrics: { targets: 1 } },
+        { key: 'analysis', status: 'completed', metrics: { insights: 1 } },
+      ],
+      insights: [{ id: insight.id, priority: 'high', status: 'accepted' }],
+    });
+    database.close();
+  });
+
   it('upgrades the v0.3 action allowlist without losing the database', async () => {
     const root = mkdtempSync(join(tmpdir(), 'pf-web-v3-migration-'));
     roots.push(root);

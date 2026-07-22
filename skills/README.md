@@ -59,3 +59,19 @@ Just drop a `<name>/SKILL.md` into one of these — no config needed. Skills
 
 All shipped skills are validated by `src/skills/conformance.test.ts`
 (name/description/allowed-tools), so a malformed skill fails CI.
+
+## Web catalog and provenance
+
+The Web workbench loads the same built-in registry without granting CLI shell or
+file tools. `skills/catalog.json` adds display metadata for curated playbooks:
+category, risk, compatibility, source URL, pinned source commit, license, and a
+short provenance statement. The API returns metadata only—never local skill paths
+or full skill bodies.
+
+The v0.5 curated set complements the upstream catalog:
+
+- `api-authorization`: BOLA, BFLA, IDOR, role, and tenant matrices.
+- `oauth-oidc`: callback, state, nonce, PKCE, code, and token boundaries.
+- `business-logic`: state-machine, limit, pricing, approval, and workflow tests.
+- `request-smuggling`: conservative, explicitly authorized HTTP desync triage.
+- `file-upload`: validation, storage, retrieval, transformation, and access control.

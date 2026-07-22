@@ -2,7 +2,8 @@ import type { Agent } from '../agent/agent.js';
 import type { AgentEvent } from '../agent/events.js';
 import { AlwaysAllow } from '../permission/permission.js';
 import { createAgentRuntime } from '../runtime/agentRuntime.js';
-import { newRegistry as newSkillRegistry } from '../skills/registry.js';
+import { LoadSkillTool } from '../skills/loadSkill.js';
+import type { Registry as SkillRegistry } from '../skills/registry.js';
 import { Target } from '../target/target.js';
 import { Registry as ToolRegistry } from '../tools/registry.js';
 import type { ActionService } from './actions/service.js';
@@ -13,6 +14,7 @@ import type { WebProviderManager } from './providers/manager.js';
 import type { DockerScannerRunner } from './scanners/dockerRunner.js';
 import { clean } from './scanners/output.js';
 import { hostInScope } from './scope.js';
+import { listWebSkills, loadWebSkillRegistry } from './skills.js';
 import type { ArtifactStore } from './storage/artifacts.js';
 import type { EngagementRow, WebDatabase } from './storage/database.js';
 import { SqliteSessionStore } from './storage/sqliteSessionStore.js';
@@ -46,6 +48,7 @@ export function createWebToolRegistry(
   artifacts: ArtifactStore,
   database: WebDatabase,
   actions: ActionService,
+  skills: SkillRegistry,
 ): ToolRegistry {
   const tools = new ToolRegistry();
   tools.register(new ScopeTargetsTool(context, artifacts));
@@ -59,6 +62,7 @@ export function createWebToolRegistry(
   tools.register(new NmapProposalTool(context, actions, true));
   tools.register(new HttpValidationProposalTool(context, actions));
   tools.register(new WebCoverageTool(context, database));
+  tools.register(new LoadSkillTool(skills));
   return tools;
 }
 
@@ -74,6 +78,24 @@ export class WebRuntimeManager {
     private readonly actions: ActionService,
   ) {}
 
+  listSkills() {
+    return listWebSkills();
+  }
+
+  async injectSkill(sessionId: string, name: string): Promise<{ loaded: string }> {
+    const runtime = this.getOrCreate(sessionId);
+    if (!runtime.agent.skills.has(name)) throw new Error('skill not found');
+    await runtime.agent.injectSkill(name);
+    this.database.audit(sessionId, 'skill.loaded', { name });
+    this.events.publish({
+      engagementId: runtime.engagement.id,
+      sessionId,
+      type: 'skill.loaded',
+      payload: { name },
+    });
+    return { loaded: name };
+  }
+
   async runTurn(
     sessionId: string,
     message: string,
@@ -81,6 +103,8 @@ export class WebRuntimeManager {
   ): Promise<{ turnId: string }> {
     const runtime = this.getOrCreate(sessionId);
     if (runtime.controller) throw new Error('a turn is already running for this session');
+    if (this.database.getSession(sessionId)?.state === 'running')
+      throw new Error('another session operation is already running');
     const displayMessage = options.displayMessage ?? message;
     const turnId = this.database.createTurn(sessionId, displayMessage);
     const controller = new AbortController();
@@ -488,6 +512,8 @@ export class WebRuntimeManager {
     const runtime = this.getOrCreate(sessionId);
     if (runtime.controller)
       throw new Error('a turn or scanner action is already running for this session');
+    if (this.database.getSession(sessionId)?.state === 'running')
+      throw new Error('another session operation is already running');
     const pending = this.database.getActionProposal(proposalId);
     if (!pending || pending.sessionId !== sessionId) throw new Error('action proposal not found');
     const claimed = this.actions.claim(proposalId, approvalHash, browserSessionId);
@@ -595,6 +621,7 @@ export class WebRuntimeManager {
         return holder.currentTurnId;
       },
     };
+    const skills = loadWebSkillRegistry();
     const runtime: LiveSession = {
       engagement,
       currentTurnId: undefined,
@@ -612,8 +639,9 @@ export class WebRuntimeManager {
             this.artifacts,
             this.database,
             this.actions,
+            skills,
           ),
-          skills: newSkillRegistry(),
+          skills,
           prompter: new AlwaysAllow(),
           store,
           target,

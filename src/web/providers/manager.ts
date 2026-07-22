@@ -149,7 +149,10 @@ export class WebProviderManager {
   }
 
   private async qwenCapabilities(): Promise<ProviderCapabilities> {
-    const probe = await command(this.qwenPath, ['--version']);
+    // Qwen's launcher may need to spin up its Node runtime before printing the
+    // version. A three-second health timeout was too aggressive on a busy host
+    // and Execa reports those timeouts with an undefined exitCode.
+    const probe = await command(this.qwenPath, ['--version'], 10_000);
     let models = ['default'];
     let discoveryError: string | undefined;
     try {
@@ -260,11 +263,20 @@ export function modelsFromQwenSettings(value: unknown): string[] {
   const add = (candidate: unknown): void => {
     if (typeof candidate === 'string' && isSafeModelId(candidate)) models.add(candidate);
   };
-  if (isRecord(value.model)) add(value.model.name);
+  if (typeof value.model === 'string') add(value.model);
+  if (isRecord(value.model)) {
+    add(value.model.id);
+    add(value.model.name);
+  }
   if (isRecord(value.modelProviders)) {
     for (const entries of Object.values(value.modelProviders)) {
       if (!Array.isArray(entries)) continue;
-      for (const entry of entries) if (isRecord(entry)) add(entry.id);
+      for (const entry of entries) {
+        if (!isRecord(entry)) continue;
+        // `id` is the current Qwen Code schema. Accept `model` and `name` as
+        // compatibility fields used by older/provider-specific settings.
+        add(entry.id ?? entry.model ?? entry.name);
+      }
     }
   }
   return [...models];
@@ -359,11 +371,30 @@ async function command(
     });
     const stdout = clean(result.stdout);
     const stderr = clean(result.stderr);
+    if (result.timedOut)
+      return {
+        ready: false,
+        version: 'unavailable',
+        stdout,
+        error: `CLI health check timed out after ${timeout}ms`,
+      };
+    if (result.signal)
+      return {
+        ready: false,
+        version: 'unavailable',
+        stdout,
+        error: `CLI terminated by ${result.signal}${stderr ? `: ${stderr.slice(0, 900)}` : ''}`,
+      };
+    const exitCode = result.exitCode;
     return {
-      ready: result.exitCode === 0,
+      ready: exitCode === 0,
       version: stdout.split(/\r?\n/, 1)[0] || 'unknown',
       stdout,
-      error: result.exitCode === 0 ? undefined : stderr.slice(0, 1000) || `exit ${result.exitCode}`,
+      error:
+        exitCode === 0
+          ? undefined
+          : stderr.slice(0, 1000) ||
+            (typeof exitCode === 'number' ? `CLI exited ${exitCode}` : 'CLI stopped unexpectedly'),
     };
   } catch (error) {
     return { ready: false, version: 'unavailable', stdout: '', error: errorText(error) };

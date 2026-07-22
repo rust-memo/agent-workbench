@@ -52,6 +52,18 @@ export interface SlashCommand {
   args?: string;
   description: string;
 }
+export interface WorkbenchSkill {
+  name: string;
+  description: string;
+  explicitOnly: boolean;
+  category: string;
+  risk: 'low' | 'medium' | 'high';
+  compatibility: Array<'cli' | 'web'>;
+  source: string;
+  sourceCommit?: string;
+  license: string;
+  provenance: string;
+}
 export interface Artifact {
   id: string;
   sessionId: string;
@@ -65,13 +77,7 @@ export interface Artifact {
 export interface ActionProposal {
   id: string;
   sessionId: string;
-  action:
-    | 'katana'
-    | 'nuclei'
-    | 'ffuf'
-    | 'nmap_connect'
-    | 'nmap_raw'
-    | 'validate_http';
+  action: 'katana' | 'nuclei' | 'ffuf' | 'nmap_connect' | 'nmap_raw' | 'validate_http';
   arguments: Record<string, unknown>;
   reason: string;
   risk: 'medium' | 'high';
@@ -110,6 +116,37 @@ export interface CoverageRow {
 export interface CoverageResponse {
   summary: Record<string, number>;
   rows: CoverageRow[];
+}
+export interface ReconStep {
+  id: string;
+  key: string;
+  label: string;
+  status: 'pending' | 'running' | 'completed' | 'skipped' | 'failed' | 'cancelled';
+  artifactId?: string;
+  detail?: string;
+  metrics: Record<string, unknown>;
+}
+export interface ReconInsight {
+  id: string;
+  type: 'asset' | 'signal' | 'recommendation' | 'manual-test';
+  priority: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  title: string;
+  rationale: string;
+  target?: string;
+  skill?: string;
+  status: 'new' | 'accepted' | 'dismissed' | 'completed';
+}
+export interface ReconRun {
+  id: string;
+  sessionId: string;
+  profile: 'quick' | 'standard' | 'advanced';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  currentStep?: string;
+  progress: number;
+  summary: Record<string, unknown>;
+  createdAt: string;
+  steps: ReconStep[];
+  insights: ReconInsight[];
 }
 
 let csrfToken = '';

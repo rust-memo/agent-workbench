@@ -9,6 +9,7 @@ import { ActionService, publicProposal } from './actions/service.js';
 import { WEB_SLASH_COMMANDS, commandUsesProvider } from './commands.js';
 import { EventHub } from './events.js';
 import { WebProviderManager } from './providers/manager.js';
+import { ReconService } from './recon/service.js';
 import { WebRuntimeManager } from './runtime.js';
 import { DockerScannerRunner } from './scanners/dockerRunner.js';
 import { createScope, scopeSchema } from './scope.js';
@@ -82,6 +83,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     options.ollamaBaseURL ?? process.env.PENTESTERFLOW_OLLAMA_URL ?? 'http://127.0.0.1:11434',
   );
   const actions = new ActionService(database, artifacts, events, runner);
+  const recon = new ReconService(database, artifacts, events, runner, actions);
   const legacySessions = new LegacySessionImporter(database, options.legacySessionsDir);
   const runtime = new WebRuntimeManager(database, artifacts, events, runner, providers, actions);
   const app = express();
@@ -156,7 +158,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       runner.health(),
     ]);
     res.json({
-      version: '0.4.0',
+      version: '0.5.0',
       providers: providerCapabilities,
       scanners,
       recovery,
@@ -202,6 +204,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     res.status(201).json(await legacySessions.import(legacyId, body));
   });
   app.get('/api/v1/commands', (_req, res) => res.json(WEB_SLASH_COMMANDS));
+  app.get('/api/v1/skills', (_req, res) => res.json(runtime.listSkills()));
   app.post('/api/v1/sessions', (req, res) => {
     const body = sessionBody.parse(req.body);
     if (!database.getEngagement(body.engagementId))
@@ -232,6 +235,15 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     });
     return res.json(runtime.configureProvider(id, body.provider, body.model));
   });
+  app.post('/api/v1/sessions/:id/skills/:name/load', async (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const name = z
+      .string()
+      .regex(/^[a-z0-9-]{1,64}$/)
+      .parse(req.params.name);
+    if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
+    res.json(await runtime.injectSkill(id, name));
+  });
   app.get('/api/v1/events', (req, res) => {
     const after = z.coerce.number().int().min(0).default(0).parse(req.query.after);
     const sessionId =
@@ -239,6 +251,33 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
         ? z.string().uuid().parse(req.query.sessionId)
         : undefined;
     res.json(database.eventsAfter(after, sessionId));
+  });
+  app.get('/api/v1/sessions/:id/recon-runs', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
+    res.json(recon.list(id));
+  });
+  app.post('/api/v1/sessions/:id/recon-runs', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const body = z
+      .object({ profile: z.enum(['quick', 'standard', 'advanced']) })
+      .strict()
+      .parse(req.body);
+    res.status(202).json(recon.start(id, body.profile));
+  });
+  app.post('/api/v1/sessions/:id/recon-runs/:runId/cancel', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const runId = z.string().uuid().parse(req.params.runId);
+    res.json({ cancelled: recon.cancel(id, runId) });
+  });
+  app.patch('/api/v1/sessions/:id/recon-insights/:insightId', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const insightId = z.string().uuid().parse(req.params.insightId);
+    const body = z
+      .object({ status: z.enum(['new', 'accepted', 'dismissed', 'completed']) })
+      .strict()
+      .parse(req.body);
+    res.json(recon.updateInsight(id, insightId, body.status));
   });
   app.post('/api/v1/sessions/:id/turns', async (req, res) => {
     const id = z.string().uuid().parse(req.params.id);

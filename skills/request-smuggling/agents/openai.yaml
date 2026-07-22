@@ -1,0 +1,4 @@
+interface:
+  display_name: "Request Smuggling"
+  short_description: "Conservative HTTP desync triage and evidence"
+  default_prompt: "Use $request-smuggling to plan safe evidence-driven testing for this authorized scope."

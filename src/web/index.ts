@@ -2,10 +2,11 @@ import { startWebServer } from './server.js';
 
 const rawPort = process.env.PENTESTERFLOW_WEB_PORT;
 const port = rawPort ? Number.parseInt(rawPort, 10) : 9099;
+const dataDir = process.env.PENTESTERFLOW_WEB_DATA_DIR;
 
 try {
-  const handle = await startWebServer({ port });
-  process.stdout.write(`Agent Workbench v0.4.0 is listening on http://127.0.0.1:${handle.port}\n`);
+  const handle = await startWebServer({ port, ...(dataDir ? { dataDir } : {}) });
+  process.stdout.write(`Agent Workbench v0.5.0 is listening on http://127.0.0.1:${handle.port}\n`);
   process.stdout.write(`Open this single-use pairing URL:\n${handle.pairingURL}\n`);
   const stop = async (): Promise<void> => {
     await handle.close();

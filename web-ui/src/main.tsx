@@ -14,9 +14,12 @@ import {
   type Engagement,
   type Finding,
   type LegacySession,
+  type ReconInsight,
+  type ReconRun,
   type RuntimeEvent,
   type Session,
   type SlashCommand,
+  type WorkbenchSkill,
   type WorkbenchStatus,
   api,
   pairFromFragment,
@@ -37,6 +40,9 @@ function App(): React.ReactElement {
   const [status, setStatus] = useState<WorkbenchStatus | null>(null);
   const [commands, setCommands] = useState<SlashCommand[]>([]);
   const [legacySessions, setLegacySessions] = useState<LegacySession[]>([]);
+  const [skills, setSkills] = useState<WorkbenchSkill[]>([]);
+  const [reconRuns, setReconRuns] = useState<ReconRun[]>([]);
+  const [reconProfile, setReconProfile] = useState<ReconRun['profile']>('standard');
   const [providerDraft, setProviderDraft] = useState<Session['provider']>('qwen');
   const [modelDraft, setModelDraft] = useState('default');
   const [checkingProviders, setCheckingProviders] = useState(false);
@@ -50,31 +56,36 @@ function App(): React.ReactElement {
   const lastSeq = useRef(0);
 
   const refreshSessionData = useCallback(async (sessionId: string) => {
-    const [files, actions, nextFindings, nextCoverage] = await Promise.all([
+    const [files, actions, nextFindings, nextCoverage, runs] = await Promise.all([
       api<Artifact[]>(`/sessions/${sessionId}/artifacts`),
       api<ActionProposal[]>(`/sessions/${sessionId}/actions`),
       api<Finding[]>(`/sessions/${sessionId}/findings`),
       api<CoverageResponse>(`/sessions/${sessionId}/coverage`),
+      api<ReconRun[]>(`/sessions/${sessionId}/recon-runs`),
     ]);
     setArtifacts(files);
     setProposals(actions);
     setFindings(nextFindings);
     setCoverage(nextCoverage);
+    setReconRuns(runs);
   }, []);
 
   const refresh = useCallback(async () => {
-    const [nextEngagements, nextSessions, nextStatus, nextCommands, nextLegacy] = await Promise.all([
-      api<Engagement[]>('/engagements'),
-      api<Session[]>('/sessions'),
-      api<WorkbenchStatus>('/status'),
-      api<SlashCommand[]>('/commands'),
-      api<LegacySession[]>('/legacy-sessions'),
-    ]);
+    const [nextEngagements, nextSessions, nextStatus, nextCommands, nextLegacy, nextSkills] =
+      await Promise.all([
+        api<Engagement[]>('/engagements'),
+        api<Session[]>('/sessions'),
+        api<WorkbenchStatus>('/status'),
+        api<SlashCommand[]>('/commands'),
+        api<LegacySession[]>('/legacy-sessions'),
+        api<WorkbenchSkill[]>('/skills'),
+      ]);
     setEngagements(nextEngagements);
     setSessions(nextSessions);
     setStatus(nextStatus);
     setCommands(nextCommands);
     setLegacySessions(nextLegacy);
+    setSkills(nextSkills);
     setSelected((current) => current || nextSessions[0]?.id || '');
   }, []);
 
@@ -113,7 +124,8 @@ function App(): React.ReactElement {
         if (
           (event.type === 'artifact.saved' ||
             event.type.startsWith('action.') ||
-            event.type.startsWith('finding.')) &&
+            event.type.startsWith('finding.') ||
+            event.type.startsWith('recon.')) &&
           (!selected || event.sessionId === selected)
         ) {
           void refreshSessionData(event.sessionId);
@@ -146,6 +158,7 @@ function App(): React.ReactElement {
       setProposals([]);
       setFindings([]);
       setCoverage({ summary: {}, rows: [] });
+      setReconRuns([]);
       return;
     }
     void Promise.all([
@@ -258,7 +271,13 @@ function App(): React.ReactElement {
     setCancellingSession(selected);
     setError('');
     try {
-      const result = await api<{ cancelled: boolean }>(`/sessions/${selected}/cancel`, {
+      const runningRecon = reconRuns.find(
+        (run) => run.status === 'running' || run.status === 'queued',
+      );
+      const path = runningRecon
+        ? `/sessions/${selected}/recon-runs/${runningRecon.id}/cancel`
+        : `/sessions/${selected}/cancel`;
+      const result = await api<{ cancelled: boolean }>(path, {
         method: 'POST',
       });
       if (!result.cancelled) {
@@ -268,6 +287,51 @@ function App(): React.ReactElement {
       }
     } catch (cause) {
       setCancellingSession('');
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const startRecon = async (): Promise<void> => {
+    if (!selected) return;
+    try {
+      await api(`/sessions/${selected}/recon-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ profile: reconProfile }),
+      });
+      await Promise.all([refresh(), refreshSessionData(selected)]);
+      setError('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const loadSkill = async (name: string, target?: string): Promise<void> => {
+    if (!selected) return;
+    try {
+      await api(`/sessions/${selected}/skills/${encodeURIComponent(name)}/load`, {
+        method: 'POST',
+      });
+      setMessage(
+        `Use /${name} to plan the next safe manual test${target ? ` for ${target}` : ''}.`,
+      );
+      setError('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const updateInsight = async (
+    insight: ReconInsight,
+    nextStatus: ReconInsight['status'],
+  ): Promise<void> => {
+    if (!selected) return;
+    try {
+      await api(`/sessions/${selected}/recon-insights/${insight.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      await refreshSessionData(selected);
+    } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   };
@@ -424,7 +488,7 @@ function App(): React.ReactElement {
           <span className="brand-mark">AW</span>
           <div>
             <strong>Agent Workbench</strong>
-            <small>Local AI Security Workbench · v0.4.0</small>
+            <small>Local AI Security Workbench · v0.5.0</small>
           </div>
         </div>
         <div className="provider-switcher">
@@ -563,21 +627,24 @@ function App(): React.ReactElement {
               )}
             </article>
           ))}
-          {legacySessions.length === 0 && <div className="empty compact">No CLI JSON sessions.</div>}
+          {legacySessions.length === 0 && (
+            <div className="empty compact">No CLI JSON sessions.</div>
+          )}
         </div>
       </aside>
 
       <div
         className="splitter splitter-left"
         role="separator"
+        tabIndex={0}
         aria-label="Resize sessions panel"
         onPointerDown={(event) => startResize('left', event)}
       />
 
-      <main className="terminal-panel">
+      <main className="terminal-panel recon-layout">
         <div className="panel-head">
           <div>
-            <span className="eyebrow">LIVE SESSION</span>
+            <span className="eyebrow">RECON WORKSPACE</span>
             <h1>{activeSession?.title ?? 'No session selected'}</h1>
           </div>
           <div className="panel-actions">
@@ -606,7 +673,25 @@ function App(): React.ReactElement {
             )}
           </div>
         </div>
-        <ProgressDock events={visibleEvents} state={activeSession?.state ?? 'idle'} />
+        <ReconWorkspace
+          engagement={activeEngagement}
+          session={activeSession}
+          runs={reconRuns}
+          profile={reconProfile}
+          setProfile={setReconProfile}
+          skills={skills}
+          provider={providerDraft}
+          model={modelDraft || 'default'}
+          onStart={() => void startRecon()}
+          onRefresh={() => selected && void refreshSessionData(selected)}
+          onCreated={async (sessionId) => {
+            await refresh();
+            setSelected(sessionId);
+          }}
+          onLoadSkill={(name, target) => void loadSkill(name, target)}
+          onUpdateInsight={(insight, nextStatus) => void updateInsight(insight, nextStatus)}
+          onError={setError}
+        />
         <div className="terminal" role="log" aria-live="polite">
           {visibleEvents.length === 0 && (
             <div className="terminal-empty">
@@ -617,7 +702,7 @@ function App(): React.ReactElement {
               </p>
             </div>
           )}
-          {visibleEvents.map((event) => (
+          {visibleEvents.slice(terminalCompact ? -20 : -60).map((event) => (
             <EventLine key={event.eventId} event={event} />
           ))}
         </div>
@@ -675,6 +760,7 @@ function App(): React.ReactElement {
       <div
         className="splitter splitter-right"
         role="separator"
+        tabIndex={0}
         aria-label="Resize inspector panel"
         onPointerDown={(event) => startResize('right', event)}
       />
@@ -779,7 +865,11 @@ function App(): React.ReactElement {
         </div>
         <div className="scanner-grid">
           {Object.entries(status?.scanners ?? {}).map(([name, scanner]) => (
-            <span key={name} className={scanner.available ? 'ready' : 'offline'} title={scanner.detail}>
+            <span
+              key={name}
+              className={scanner.available ? 'ready' : 'offline'}
+              title={scanner.detail}
+            >
               <i /> {name} <small>{scanner.profile}</small>
             </span>
           ))}
@@ -800,6 +890,387 @@ function App(): React.ReactElement {
       )}
     </div>
   );
+}
+
+function ReconWorkspace({
+  engagement,
+  session,
+  runs,
+  profile,
+  setProfile,
+  skills,
+  provider,
+  model,
+  onStart,
+  onRefresh,
+  onCreated,
+  onLoadSkill,
+  onUpdateInsight,
+  onError,
+}: {
+  engagement?: Engagement;
+  session?: Session;
+  runs: ReconRun[];
+  profile: ReconRun['profile'];
+  setProfile: (profile: ReconRun['profile']) => void;
+  skills: WorkbenchSkill[];
+  provider: Session['provider'];
+  model: string;
+  onStart: () => void;
+  onRefresh: () => void;
+  onCreated: (sessionId: string) => Promise<void>;
+  onLoadSkill: (name: string, target?: string) => void;
+  onUpdateInsight: (insight: ReconInsight, status: ReconInsight['status']) => void;
+  onError: (message: string) => void;
+}): React.ReactElement {
+  const latest = runs[0];
+  const running = latest?.status === 'running' || latest?.status === 'queued';
+  const curated = [
+    'api-authorization',
+    'oauth-oidc',
+    'business-logic',
+    'request-smuggling',
+    'file-upload',
+  ];
+  const visibleSkills = [...skills].sort((left, right) => {
+    const leftRank = curated.indexOf(left.name);
+    const rightRank = curated.indexOf(right.name);
+    if (leftRank >= 0 || rightRank >= 0)
+      return (leftRank < 0 ? 999 : leftRank) - (rightRank < 0 ? 999 : rightRank);
+    return left.name.localeCompare(right.name);
+  });
+  return (
+    <section className="recon-workspace">
+      <div className="recon-toolbar">
+        <div>
+          <span className="eyebrow">AUTHORIZED TARGET</span>
+          <strong>
+            {engagement?.scope.allowedHosts.join(', ') ?? 'Create a scoped recon session'}
+          </strong>
+          <small>
+            {engagement
+              ? `${engagement.scope.allowThirdPartyPassiveSources ? 'Passive sources on' : 'Passive sources off'} · ${engagement.scope.allowDirectLowImpactRecon ? 'Low-impact direct recon allowed' : 'Direct recon off'}`
+              : 'Scope is enforced before every scanner action.'}
+          </small>
+        </div>
+        <label className="profile-select">
+          <span>Run profile</span>
+          <select
+            value={profile}
+            onChange={(event) => setProfile(event.target.value as ReconRun['profile'])}
+            disabled={!session || running}
+          >
+            <option value="quick">Quick · DNS + HTTP</option>
+            <option value="standard">Standard · + crawl/scan proposals</option>
+            <option value="advanced">Advanced · + FFUF/Nmap proposals</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          className="primary-action"
+          onClick={onStart}
+          disabled={
+            !session || engagement?.mode !== 'RECON' || running || session.state === 'running'
+          }
+        >
+          {running ? `Running ${latest.progress}%` : 'Start recon'}
+        </button>
+        <button type="button" className="quiet-action" onClick={onRefresh} disabled={!session}>
+          Refresh
+        </button>
+      </div>
+
+      <NewReconScope
+        provider={provider}
+        model={model}
+        initiallyOpen={!session}
+        onCreated={onCreated}
+        onError={onError}
+      />
+
+      <div className="recon-scroll">
+        <div className="pipeline-grid">
+          {(
+            latest?.steps ?? [
+              {
+                id: 'scope',
+                key: 'scope',
+                label: 'Scope snapshot',
+                status: 'pending',
+                metrics: {},
+              },
+              {
+                id: 'passive',
+                key: 'passive',
+                label: 'Passive discovery',
+                status: 'pending',
+                metrics: {},
+              },
+              { id: 'dns', key: 'dns', label: 'DNS resolution', status: 'pending', metrics: {} },
+              { id: 'http', key: 'http', label: 'HTTP probing', status: 'pending', metrics: {} },
+              {
+                id: 'analysis',
+                key: 'analysis',
+                label: 'Analysis',
+                status: 'pending',
+                metrics: {},
+              },
+            ]
+          ).map((step, index) => (
+            <article className={`pipeline-step ${step.status}`} key={step.id}>
+              <span>{String(index + 1).padStart(2, '0')}</span>
+              <div>
+                <strong>{step.label}</strong>
+                <small>{step.detail ?? step.status.replace('_', ' ')}</small>
+                {Object.keys(step.metrics).length > 0 && <code>{formatMetrics(step.metrics)}</code>}
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <div className="recon-columns">
+          <section className="results-panel">
+            <header>
+              <div>
+                <span className="eyebrow">RESULTS & PRIORITIES</span>
+                <h2>
+                  {latest ? `${latest.profile} run · ${latest.status}` : 'No recon results yet'}
+                </h2>
+              </div>
+              {latest && (
+                <strong className={`run-status ${latest.status}`}>{latest.progress}%</strong>
+              )}
+            </header>
+            {latest && Object.keys(latest.summary).length > 0 && (
+              <div className="summary-grid">
+                {Object.entries(latest.summary)
+                  .filter(([, value]) => typeof value === 'number')
+                  .map(([key, value]) => (
+                    <span key={key}>
+                      <strong>{String(value)}</strong>
+                      {humanize(key)}
+                    </span>
+                  ))}
+              </div>
+            )}
+            <div className="insight-list">
+              {latest?.insights.map((insight) => (
+                <article
+                  className={`insight-card ${insight.priority} ${insight.status}`}
+                  key={insight.id}
+                >
+                  <div className="insight-title">
+                    <span className={`priority ${insight.priority}`}>{insight.priority}</span>
+                    <strong>{insight.title}</strong>
+                    <small>{insight.type}</small>
+                  </div>
+                  <p>{insight.rationale}</p>
+                  {insight.target && <code>{insight.target}</code>}
+                  <div className="insight-actions">
+                    {insight.skill && (
+                      <button
+                        type="button"
+                        onClick={() => insight.skill && onLoadSkill(insight.skill, insight.target)}
+                      >
+                        Load /{insight.skill}
+                      </button>
+                    )}
+                    {insight.status === 'new' && (
+                      <>
+                        <button type="button" onClick={() => onUpdateInsight(insight, 'accepted')}>
+                          Queue review
+                        </button>
+                        <button type="button" onClick={() => onUpdateInsight(insight, 'dismissed')}>
+                          Dismiss
+                        </button>
+                      </>
+                    )}
+                    {insight.status === 'accepted' && (
+                      <button type="button" onClick={() => onUpdateInsight(insight, 'completed')}>
+                        Mark tested
+                      </button>
+                    )}
+                  </div>
+                </article>
+              ))}
+              {!latest?.insights.length && (
+                <div className="empty compact">
+                  Start a run to rank live assets, review signals, and generate manual follow-ups.
+                </div>
+              )}
+            </div>
+          </section>
+
+          <aside className="skills-panel">
+            <header>
+              <span className="eyebrow">TEST PLAYBOOKS</span>
+              <h2>{skills.length} available skills</h2>
+            </header>
+            {visibleSkills.map((skill) => (
+              <article className="skill-card" key={skill.name}>
+                <div>
+                  <strong>/{skill.name}</strong>
+                  <span className={`priority ${skill.risk}`}>{skill.risk}</span>
+                </div>
+                <p>{skill.description}</p>
+                <small>
+                  {skill.category} · {skill.license} ·{' '}
+                  {skill.explicitOnly ? 'manual only' : 'agent ready'}
+                </small>
+                <div>
+                  <button type="button" onClick={() => onLoadSkill(skill.name)} disabled={!session}>
+                    Load for next turn
+                  </button>
+                  <a href={skill.source} target="_blank" rel="noreferrer">
+                    Source
+                  </a>
+                </div>
+              </article>
+            ))}
+          </aside>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function NewReconScope({
+  provider,
+  model,
+  initiallyOpen,
+  onCreated,
+  onError,
+}: {
+  provider: Session['provider'];
+  model: string;
+  initiallyOpen: boolean;
+  onCreated: (sessionId: string) => Promise<void>;
+  onError: (message: string) => void;
+}): React.ReactElement {
+  const [domain, setDomain] = useState('');
+  const [name, setName] = useState('');
+  const [subdomains, setSubdomains] = useState(true);
+  const [passive, setPassive] = useState(false);
+  const [direct, setDirect] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault();
+    const host = normalizeDomainInput(domain);
+    if (!host) {
+      onError('Enter one valid domain without a path.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const allowedHosts = subdomains ? [host, `*.${host}`] : [host];
+      const engagement = await api<Engagement>('/engagements', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: name.trim() || host,
+          mode: 'RECON',
+          scope: {
+            allowedHosts,
+            allowThirdPartyPassiveSources: passive,
+            allowDirectLowImpactRecon: direct,
+            limits: {
+              requestsPerSecond: 5,
+              concurrency: 5,
+              maxUrlsPerHost: 500,
+              maxRedirects: 0,
+              maxRuntimeSeconds: 300,
+              maxOutputBytes: 10485760,
+            },
+          },
+        }),
+      });
+      const session = await api<Session>('/sessions', {
+        method: 'POST',
+        body: JSON.stringify({
+          engagementId: engagement.id,
+          title: `${name.trim() || host} / Recon`,
+          provider,
+          model,
+        }),
+      });
+      setDomain('');
+      setName('');
+      await onCreated(session.id);
+      onError('');
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <details className="new-scope" open={initiallyOpen || undefined}>
+      <summary>＋ New authorized scope</summary>
+      <form onSubmit={(event) => void submit(event)}>
+        <label>
+          <span>Root domain</span>
+          <input
+            value={domain}
+            onChange={(event) => setDomain(event.target.value)}
+            placeholder="example.com"
+          />
+        </label>
+        <label>
+          <span>Engagement name</span>
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Optional label"
+          />
+        </label>
+        <label className="check-field">
+          <input
+            type="checkbox"
+            checked={subdomains}
+            onChange={(event) => setSubdomains(event.target.checked)}
+          />
+          Include subdomains
+        </label>
+        <label className="check-field">
+          <input
+            type="checkbox"
+            checked={passive}
+            onChange={(event) => setPassive(event.target.checked)}
+          />
+          Allow third-party passive sources
+        </label>
+        <label className="check-field">
+          <input
+            type="checkbox"
+            checked={direct}
+            onChange={(event) => setDirect(event.target.checked)}
+          />
+          Allow low-impact direct recon
+        </label>
+        <button type="submit" disabled={busy || !domain.trim()}>
+          {busy ? 'Creating…' : 'Create scoped workspace'}
+        </button>
+      </form>
+    </details>
+  );
+}
+
+function normalizeDomainInput(value: string): string {
+  const trimmed = value.trim().toLowerCase().replace(/^\*\./, '').replace(/\.$/, '');
+  if (!trimmed || trimmed.includes('/') || trimmed.includes(':') || /\s/.test(trimmed)) return '';
+  return trimmed;
+}
+
+function formatMetrics(metrics: Record<string, unknown>): string {
+  return Object.entries(metrics)
+    .map(([key, value]) => `${humanize(key)} ${String(value)}`)
+    .join(' · ');
+}
+
+function humanize(value: string): string {
+  return value
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[-_]/g, ' ')
+    .toLowerCase();
 }
 
 function EventLine({ event }: { event: RuntimeEvent }): React.ReactElement {
@@ -835,80 +1306,6 @@ function EventLine({ event }: { event: RuntimeEvent }): React.ReactElement {
       <pre>{text}</pre>
     </div>
   );
-}
-
-function ProgressDock({
-  events,
-  state,
-}: {
-  events: RuntimeEvent[];
-  state: Session['state'];
-}): React.ReactElement {
-  const latest = events.at(-1);
-  const cloud = [...events].reverse().find((event) => event.type === 'provider.cloud-preview');
-  const progress = operationProgress(latest, state);
-  return (
-    <section className={`progress-dock ${progress.tone}`} aria-label="Current operation progress">
-      <div className="progress-summary">
-        <div>
-          <span className="eyebrow">OPERATION</span>
-          <strong>{progress.label}</strong>
-        </div>
-        <span>{progress.percent}%</span>
-      </div>
-      <div className="progress-track" aria-hidden="true">
-        <i style={{ width: `${progress.percent}%` }} />
-      </div>
-      <div className="progress-stages">
-        {['Queued', 'Redacted', 'Running', 'Saving', 'Done'].map((stage, index) => (
-          <span key={stage} className={progress.percent >= index * 25 ? 'active' : ''}>
-            {stage}
-          </span>
-        ))}
-      </div>
-      {cloud && (
-        <details className="cloud-preview">
-          <summary>
-            Cloud preview · {String(cloud.payload.provider)} / {String(cloud.payload.model)} ·{' '}
-            {formatBytes(Number(cloud.payload.bytes) || 0)} ·{' '}
-            {Number(cloud.payload.redactionCount) || 0} redactions
-          </summary>
-          <div className="preview-meta">
-            SHA-256 <code>{String(cloud.payload.sha256)}</code>
-          </div>
-          <pre>{String(cloud.payload.preview ?? '')}</pre>
-        </details>
-      )}
-    </section>
-  );
-}
-
-function operationProgress(
-  latest: RuntimeEvent | undefined,
-  state: Session['state'],
-): { label: string; percent: number; tone: string } {
-  if (!latest) return { label: 'Ready for a turn', percent: 0, tone: 'idle' };
-  if (state === 'cancelled' || latest.type.includes('cancelled'))
-    return { label: 'Operation cancelled', percent: 100, tone: 'cancelled' };
-  if (state === 'error' || latest.type.includes('error') || latest.type === 'action.failed')
-    return { label: 'Operation stopped with an error', percent: 100, tone: 'error' };
-  if (latest.type === 'turn.finished' || latest.type === 'action.completed')
-    return { label: 'Operation complete', percent: 100, tone: 'done' };
-  if (latest.type.includes('cancel-requested'))
-    return { label: 'Stopping the current operation…', percent: 75, tone: 'running' };
-  if (latest.type === 'provider.cloud-preview')
-    return { label: 'Redacted payload dispatched to the model', percent: 35, tone: 'running' };
-  if (latest.type === 'artifact.saved')
-    return { label: 'Saving verified artifact metadata', percent: 85, tone: 'running' };
-  if (latest.type.includes('tool-result') || latest.type.includes('assistant'))
-    return { label: 'Processing model response', percent: 65, tone: 'running' };
-  if (latest.type === 'action.started')
-    return { label: 'Isolated scanner is running', percent: 40, tone: 'running' };
-  if (latest.type === 'turn.started')
-    return { label: 'Preparing redacted model context', percent: 15, tone: 'running' };
-  return state === 'running'
-    ? { label: 'Operation in progress', percent: 50, tone: 'running' }
-    : { label: 'Ready for a turn', percent: 0, tone: 'idle' };
 }
 
 function ArtifactCard({ artifact }: { artifact: Artifact }): React.ReactElement {
