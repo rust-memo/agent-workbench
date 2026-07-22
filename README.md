@@ -239,6 +239,9 @@ The application shell keeps the primary workspace navigation visible while
 Sessions, Scope, Providers, Reports, and Settings open as focused side panels.
 The lower status card always exposes local-mode and service health, and the
 operator canvas remains dedicated to the transcript and approval/evidence rail.
+The operations rail uses expanded approval cards with explicit target, risk, and
+single-use authorization details, followed by visual artifact, finding,
+coverage, AI-assessment, and audit panels.
 
 `Analyze evidence with AI` sends the selected provider a bounded evidence
 envelope containing the current scope, run summary, recent typed-tool output,

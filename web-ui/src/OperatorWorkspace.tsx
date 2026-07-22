@@ -394,7 +394,12 @@ function MissionRail({
       <ApprovalPanel proposal={pending[0]} onApprove={onApprove} onReject={onReject} />
 
       {page === 'output' && (
-        <RailCard title="Tool activity" count={activity.length} className="tool-activity-card">
+        <RailCard
+          icon="⌁"
+          title="Tool activity"
+          count={activity.length}
+          className="tool-activity-card"
+        >
           <div className="rail-list">
             {activity
               .slice(-5)
@@ -414,7 +419,7 @@ function MissionRail({
         </RailCard>
       )}
 
-      <RailCard title="Artifacts" count={artifacts.length}>
+      <RailCard icon="⬡" title="Artifacts" count={artifacts.length} link="View all artifacts →">
         <div className="artifact-peek">
           {artifacts.slice(-3).map((artifact) => (
             <article key={artifact.id}>
@@ -427,7 +432,7 @@ function MissionRail({
         </div>
       </RailCard>
 
-      <RailCard title="Findings" count={findings.length}>
+      <RailCard icon="◎" title="Findings" count={findings.length} link="View all findings →">
         <div className="severity-bars">
           {(['critical', 'high', 'medium', 'low'] as const).map((level) => (
             <div key={level}>
@@ -445,7 +450,7 @@ function MissionRail({
         </div>
       </RailCard>
 
-      <RailCard title="Coverage" count={`${coveragePercent}%`}>
+      <RailCard icon="♢" title="Coverage" count={`${coveragePercent}%`} link="View details →">
         <div className="coverage-peek">
           <i>
             <b style={{ width: `${coveragePercent}%` }} />
@@ -464,6 +469,7 @@ function MissionRail({
       </RailCard>
 
       <RailCard
+        icon="✣"
         title="AI assessment"
         action={analyzing ? 'Analyzing…' : 'Analyze'}
         onAction={onAnalyze}
@@ -493,9 +499,12 @@ function MissionRail({
       </RailCard>
 
       <section className="audit-strip">
-        <span>Audit</span>
+        <i>▱</i>
+        <div>
+          <span>Audit</span>
+          <small>{events.length} actions in this session</small>
+        </div>
         <strong>All actions recorded</strong>
-        <small>{events.length} events</small>
       </section>
     </aside>
   );
@@ -513,23 +522,32 @@ function ApprovalPanel({
   return (
     <section className={`approval-panel ${proposal ? 'pending' : 'clear'}`}>
       <header>
-        <strong>Approvals</strong>
+        <div>
+          <i>✓</i>
+          <strong>Approvals</strong>
+        </div>
         <span>{proposal ? '1 pending' : 'Clear'}</span>
       </header>
       {proposal ? (
-        <>
-          <h3>{proposal.action}</h3>
-          <dl>
-            <div>
-              <dt>Risk</dt>
-              <dd>{proposal.risk}</dd>
-            </div>
-            <div>
-              <dt>Authorization</dt>
-              <dd>Single use</dd>
-            </div>
-          </dl>
-          <p>{proposal.reason}</p>
+        <div className="approval-content">
+          <div className="approval-copy">
+            <h3>{proposal.action} scan proposal</h3>
+            <dl>
+              <div>
+                <dt>Security</dt>
+                <dd>{proposal.risk}</dd>
+              </div>
+              <div>
+                <dt>Targets</dt>
+                <dd>{approvalTarget(proposal)}</dd>
+              </div>
+              <div>
+                <dt>Authorization</dt>
+                <dd>Single use</dd>
+              </div>
+            </dl>
+            <p>{proposal.reason}</p>
+          </div>
           <div className="approval-buttons">
             <button type="button" className="approve" onClick={() => onApprove(proposal)}>
               ✓ Approve
@@ -538,7 +556,7 @@ function ApprovalPanel({
               × Deny
             </button>
           </div>
-        </>
+        </div>
       ) : (
         <div className="approval-clear">
           <i>✓</i>
@@ -550,15 +568,19 @@ function ApprovalPanel({
 }
 
 function RailCard({
+  icon,
   title,
   count,
+  link,
   action,
   onAction,
   className = '',
   children,
 }: {
+  icon: string;
   title: string;
   count?: number | string;
+  link?: string;
   action?: string;
   onAction?: () => void;
   className?: string;
@@ -567,14 +589,20 @@ function RailCard({
   return (
     <section className={`rail-card ${className}`}>
       <header>
-        <strong>{title}</strong>
-        {action ? (
-          <button type="button" onClick={onAction}>
-            {action}
-          </button>
-        ) : (
-          <span>{count}</span>
-        )}
+        <div>
+          <i>{icon}</i>
+          <strong>{title}</strong>
+        </div>
+        <div className="rail-card-meta">
+          {count !== undefined && <span>{count}</span>}
+          {action ? (
+            <button type="button" onClick={onAction}>
+              {action}
+            </button>
+          ) : (
+            link && <small>{link}</small>
+          )}
+        </div>
       </header>
       {children}
     </section>
@@ -583,6 +611,15 @@ function RailCard({
 
 function RailEmpty({ text }: { text: string }): React.ReactElement {
   return <p className="rail-empty">{text}</p>;
+}
+
+function approvalTarget(proposal: ActionProposal): string {
+  const args = proposal.arguments;
+  const value = args.target ?? args.url ?? args.host ?? args.inputArtifactId;
+  if (typeof value === 'string' && value.trim()) return value.slice(0, 80);
+  const targets = args.targets;
+  if (Array.isArray(targets)) return targets.map(String).slice(0, 3).join(', ');
+  return 'Scoped targets';
 }
 
 function filterEvents(events: RuntimeEvent[], filter: StreamFilter): RuntimeEvent[] {
