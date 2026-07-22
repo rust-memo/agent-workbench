@@ -232,8 +232,13 @@ occupying AI Operator workspace space.
 The rebuilt command-center UI uses a compact navigation rail for **AI Operator**,
 **Output & Evidence**, and **Recon Board**; live Target/Mode/Provider/Scanner
 Health cards; a terminal-style session transcript; and a dedicated evidence
-rail. Provider and model selection live in a focused header menu so configuration
+rail. Provider and model selection live in a focused side panel so configuration
 stays available without crowding the active operation.
+
+The application shell keeps the primary workspace navigation visible while
+Sessions, Scope, Providers, Reports, and Settings open as focused side panels.
+The lower status card always exposes local-mode and service health, and the
+operator canvas remains dedicated to the transcript and approval/evidence rail.
 
 `Analyze evidence with AI` sends the selected provider a bounded evidence
 envelope containing the current scope, run summary, recent typed-tool output,

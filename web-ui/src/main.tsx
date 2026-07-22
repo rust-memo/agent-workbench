@@ -33,6 +33,18 @@ const SIDEBAR_COLLAPSED_KEY = 'agent-workbench:sessions-sidebar-collapsed';
 const WORKSPACE_VIEW_KEY = 'agent-workbench:workspace-view';
 const OPERATOR_PAGE_KEY = 'agent-workbench:operator-page';
 type WorkspaceView = 'operator' | 'recon';
+type SidebarSection =
+  | 'operator'
+  | 'recon'
+  | 'sessions'
+  | 'scope'
+  | 'providers'
+  | 'artifacts'
+  | 'findings'
+  | 'reports'
+  | 'audit'
+  | 'settings';
+type SidebarPanel = 'sessions' | 'scope' | 'providers' | 'reports' | 'settings' | null;
 
 function initialSidebarCollapsed(): boolean {
   try {
@@ -89,6 +101,8 @@ function App(): React.ReactElement {
   const [terminalCompact, setTerminalCompact] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(initialWorkspaceView);
   const [operatorPage, setOperatorPage] = useState<OperatorPage>(initialOperatorPage);
+  const [sidebarSection, setSidebarSection] = useState<SidebarSection>('operator');
+  const [sidebarPanel, setSidebarPanel] = useState<SidebarPanel>(null);
   const lastSeq = useRef(0);
 
   useEffect(() => {
@@ -624,6 +638,27 @@ function App(): React.ReactElement {
     window.addEventListener('pointerup', stop, { once: true });
   };
 
+  const navigateSidebar = (section: SidebarSection): void => {
+    setSidebarSection(section);
+    if (section === 'recon') {
+      setSidebarPanel(null);
+      setWorkspaceView('recon');
+      return;
+    }
+    const panel = (
+      ['sessions', 'scope', 'providers', 'reports', 'settings'] as SidebarPanel[]
+    ).includes(section as SidebarPanel)
+      ? (section as SidebarPanel)
+      : null;
+    setSidebarPanel(panel);
+    setWorkspaceView('operator');
+    if (section === 'artifacts' || section === 'findings' || section === 'audit') {
+      setOperatorPage('output');
+    } else if (section === 'operator') {
+      setOperatorPage('run');
+    }
+  };
+
   if (auth === 'loading')
     return (
       <Centered title="Starting secure workbench…" detail="Restoring the local browser session." />
@@ -658,80 +693,6 @@ function App(): React.ReactElement {
           </div>
         </div>
         <div className="topbar-actions-v3">
-          <StatusPill label="Local only" tone="good" />
-          <details className="provider-menu-v3">
-            <summary>
-              <span>
-                <small>Provider</small>
-                <strong>{activeCapability?.label ?? 'Configure provider'}</strong>
-              </span>
-              <i>⌄</i>
-            </summary>
-            <div className="provider-switcher">
-              <label>
-                <span>Provider</span>
-                <select
-                  value={providerDraft}
-                  onChange={(event) => {
-                    const provider = event.target.value as Session['provider'];
-                    setProviderDraft(provider);
-                    const capability = status?.providers.find((item) => item.provider === provider);
-                    setModelDraft(capability?.models[0] ?? 'default');
-                  }}
-                  disabled={!activeSession || activeSession.state === 'running'}
-                >
-                  {status?.providers.map((provider) => (
-                    <option key={provider.provider} value={provider.provider}>
-                      {provider.ready ? '✓' : '×'} {provider.label} · {provider.models.length}{' '}
-                      models
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>Model</span>
-                <select
-                  className="model-select"
-                  value={modelDraft}
-                  onChange={(event) => setModelDraft(event.target.value)}
-                  disabled={!activeSession || activeSession.state === 'running'}
-                >
-                  {modelDraft && !draftCapability?.models.includes(modelDraft) && (
-                    <option value={modelDraft}>{modelDraft}</option>
-                  )}
-                  {draftCapability?.models.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="provider-menu-actions-v3">
-                <button
-                  type="button"
-                  onClick={() => void switchProvider()}
-                  disabled={
-                    !activeSession || activeSession.state === 'running' || !modelDraft.trim()
-                  }
-                >
-                  Apply selection
-                </button>
-                <button
-                  type="button"
-                  className="check-button"
-                  onClick={() => void checkProviders()}
-                  disabled={checkingProviders}
-                >
-                  {checkingProviders ? 'Checking…' : 'Check models'}
-                </button>
-              </div>
-              <small className={draftCapability?.ready ? 'provider-ready' : 'provider-unavailable'}>
-                {draftCapability?.ready
-                  ? `CLI ready · ${draftCapability.models.length} models discovered`
-                  : (draftCapability?.error ?? 'Unavailable')}
-              </small>
-            </div>
-          </details>
           <button
             type="button"
             className="topbar-menu-v3"
@@ -744,15 +705,12 @@ function App(): React.ReactElement {
       </header>
 
       {!sidebarCollapsed && (
-        <aside className="sidebar">
-          <nav className="primary-nav-v3" aria-label="Workbench navigation">
+        <aside className="sidebar sidebar-v5">
+          <nav className="sidebar-nav-v5" aria-label="Workbench navigation">
             <button
               type="button"
-              className={workspaceView === 'operator' && operatorPage === 'run' ? 'active' : ''}
-              onClick={() => {
-                setWorkspaceView('operator');
-                setOperatorPage('run');
-              }}
+              className={sidebarSection === 'operator' ? 'active' : ''}
+              onClick={() => navigateSidebar('operator')}
             >
               <i>⬡</i>
               <span>AI Operator</span>
@@ -760,109 +718,324 @@ function App(): React.ReactElement {
             </button>
             <button
               type="button"
-              className={workspaceView === 'operator' && operatorPage === 'output' ? 'active' : ''}
-              onClick={() => {
-                setWorkspaceView('operator');
-                setOperatorPage('output');
-              }}
+              className={sidebarSection === 'recon' ? 'active' : ''}
+              onClick={() => navigateSidebar('recon')}
+            >
+              <i>⌘</i>
+              <span>Recon Board</span>
+            </button>
+            <div className="nav-divider-v5" />
+            <button
+              type="button"
+              className={sidebarSection === 'sessions' ? 'active' : ''}
+              onClick={() => navigateSidebar('sessions')}
             >
               <i>⌁</i>
-              <span>Output & Evidence</span>
+              <span>Sessions</span>
+              <em>{sessions.length}</em>
             </button>
             <button
               type="button"
-              className={workspaceView === 'recon' ? 'active' : ''}
-              onClick={() => setWorkspaceView('recon')}
+              className={sidebarSection === 'scope' ? 'active' : ''}
+              onClick={() => navigateSidebar('scope')}
             >
-              <i>⌗</i>
-              <span>Recon Board</span>
+              <i>◎</i>
+              <span>Scope</span>
+            </button>
+            <button
+              type="button"
+              className={sidebarSection === 'providers' ? 'active' : ''}
+              onClick={() => navigateSidebar('providers')}
+            >
+              <i>✣</i>
+              <span>Providers</span>
+              <em className={activeCapability?.ready ? 'ready' : ''} />
+            </button>
+            <button
+              type="button"
+              className={sidebarSection === 'artifacts' ? 'active' : ''}
+              onClick={() => navigateSidebar('artifacts')}
+            >
+              <i>▱</i>
+              <span>Artifacts</span>
+              <em>{artifacts.length}</em>
+            </button>
+            <button
+              type="button"
+              className={sidebarSection === 'findings' ? 'active' : ''}
+              onClick={() => navigateSidebar('findings')}
+            >
+              <i>♢</i>
+              <span>Findings</span>
+              <em>{findings.length}</em>
+            </button>
+            <button
+              type="button"
+              className={sidebarSection === 'reports' ? 'active' : ''}
+              onClick={() => navigateSidebar('reports')}
+            >
+              <i>▥</i>
+              <span>Reports</span>
+            </button>
+            <button
+              type="button"
+              className={sidebarSection === 'audit' ? 'active' : ''}
+              onClick={() => navigateSidebar('audit')}
+            >
+              <i>◴</i>
+              <span>Audit Log</span>
+              <em>{visibleEvents.length}</em>
+            </button>
+            <button
+              type="button"
+              className={sidebarSection === 'settings' ? 'active' : ''}
+              onClick={() => navigateSidebar('settings')}
+            >
+              <i>⚙</i>
+              <span>Settings</span>
             </button>
           </nav>
-          <div className="section-title">
-            <span>Sessions</span>
-            <span className="section-actions">
-              <button
-                type="button"
-                aria-label="Hide sessions panel"
-                title="Hide sessions panel"
-                onClick={() => setSidebarCollapsed(true)}
-              >
-                ‹
-              </button>
-              <button
-                type="button"
-                aria-label="Create workspace"
-                title="Create workspace"
-                onClick={() =>
-                  void createWorkspace(
-                    refresh,
-                    setSelected,
-                    setError,
-                    providerDraft,
-                    modelDraft || 'default',
-                  )
-                }
-              >
-                ＋
-              </button>
-            </span>
-          </div>
-          <div className="session-list">
-            {sessions.map((session) => (
-              <button
-                type="button"
-                key={session.id}
-                className={`session-card ${selected === session.id ? 'active' : ''}`}
-                onClick={() => setSelected(session.id)}
-              >
-                <span className={`state-dot ${session.state}`} />
-                <span>
-                  <strong>{session.title}</strong>
-                  <small>
-                    {session.provider} / {session.model} · {session.state}
-                  </small>
-                </span>
-              </button>
-            ))}
-            {sessions.length === 0 && (
-              <div className="empty">Create your first scoped engagement.</div>
-            )}
-          </div>
-          {activeEngagement && (
-            <div className="scope-card">
-              <small>SCOPE v{activeEngagement.scope.version}</small>
-              <strong>{activeEngagement.name}</strong>
-              {activeEngagement.scope.allowedHosts.map((host) => (
-                <code key={host}>{host}</code>
-              ))}
-              <p>Discovery may be recorded outside scope. Active actions stay restricted.</p>
+
+          <section className="sidebar-status-v5">
+            <div>
+              <i />
+              <span>
+                <strong>System Status</strong>
+                <small>All systems operational</small>
+              </span>
             </div>
-          )}
-          {workspaceView === 'recon' && (
-            <details className="legacy-disclosure">
-              <summary>
-                <span>Legacy JSON</span>
-                <strong>{legacySessions.filter((item) => !item.imported).length}</strong>
-              </summary>
-              <div className="legacy-list">
-                {legacySessions.slice(0, 5).map((legacy) => (
-                  <article className="legacy-card" key={legacy.id}>
-                    <strong>{legacy.fileName}</strong>
-                    <small>{legacy.preview}</small>
-                    {legacy.imported ? (
-                      <span>Imported</span>
-                    ) : (
-                      <button type="button" onClick={() => void importLegacy(legacy)}>
-                        Import once
+            <div>
+              <b>▣</b>
+              <span>
+                <strong>Local Mode</strong>
+                <small>v{status?.version ?? '0.5.0'}</small>
+              </span>
+            </div>
+          </section>
+
+          {sidebarPanel && (
+            <section className="sidebar-flyout-v5">
+              <header>
+                <div>
+                  <span>{sidebarPanel}</span>
+                  <strong>{sidebarPanelTitle(sidebarPanel)}</strong>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSidebarPanel(null)}
+                  aria-label="Close panel"
+                >
+                  ×
+                </button>
+              </header>
+
+              {sidebarPanel === 'sessions' && (
+                <>
+                  <button
+                    type="button"
+                    className="flyout-primary-v5"
+                    onClick={() =>
+                      void createWorkspace(
+                        refresh,
+                        setSelected,
+                        setError,
+                        providerDraft,
+                        modelDraft || 'default',
+                      )
+                    }
+                  >
+                    ＋ New engagement
+                  </button>
+                  <div className="flyout-session-list-v5">
+                    {sessions.map((session) => (
+                      <button
+                        type="button"
+                        key={session.id}
+                        className={selected === session.id ? 'active' : ''}
+                        onClick={() => {
+                          setSelected(session.id);
+                          setSidebarPanel(null);
+                          navigateSidebar('operator');
+                        }}
+                      >
+                        <i className={`state-dot ${session.state}`} />
+                        <span>
+                          <strong>{session.title}</strong>
+                          <small>
+                            {session.provider} / {session.model} · {session.state}
+                          </small>
+                        </span>
                       </button>
+                    ))}
+                    {sessions.length === 0 && (
+                      <div className="flyout-empty-v5">No sessions yet.</div>
                     )}
+                  </div>
+                  <details className="legacy-disclosure">
+                    <summary>
+                      <span>Legacy JSON</span>
+                      <strong>{legacySessions.filter((item) => !item.imported).length}</strong>
+                    </summary>
+                    <div className="legacy-list">
+                      {legacySessions.slice(0, 5).map((legacy) => (
+                        <article className="legacy-card" key={legacy.id}>
+                          <strong>{legacy.fileName}</strong>
+                          <small>{legacy.preview}</small>
+                          {legacy.imported ? (
+                            <span>Imported</span>
+                          ) : (
+                            <button type="button" onClick={() => void importLegacy(legacy)}>
+                              Import once
+                            </button>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  </details>
+                </>
+              )}
+
+              {sidebarPanel === 'scope' && (
+                <div className="flyout-scope-v5">
+                  {activeEngagement ? (
+                    <>
+                      <span>Scope v{activeEngagement.scope.version}</span>
+                      <h2>{activeEngagement.name}</h2>
+                      {activeEngagement.scope.allowedHosts.map((host) => (
+                        <code key={host}>{host}</code>
+                      ))}
+                      <p>
+                        Discovery may be recorded outside scope. Active actions remain restricted.
+                      </p>
+                      <button
+                        type="button"
+                        className={
+                          activeEngagement.scope.allowThirdPartyPassiveSources ? 'enabled' : ''
+                        }
+                        disabled={activeSession?.state === 'running' || updatingScopePolicy}
+                        onClick={() =>
+                          void updateScopePolicy({
+                            allowThirdPartyPassiveSources:
+                              !activeEngagement.scope.allowThirdPartyPassiveSources,
+                          })
+                        }
+                      >
+                        Passive sources{' '}
+                        <strong>
+                          {activeEngagement.scope.allowThirdPartyPassiveSources ? 'Allowed' : 'Ask'}
+                        </strong>
+                      </button>
+                    </>
+                  ) : (
+                    <div className="flyout-empty-v5">Select a session to inspect its scope.</div>
+                  )}
+                </div>
+              )}
+
+              {sidebarPanel === 'providers' && (
+                <div className="sidebar-provider-form-v5">
+                  <label>
+                    <span>Provider</span>
+                    <select
+                      value={providerDraft}
+                      onChange={(event) => {
+                        const provider = event.target.value as Session['provider'];
+                        setProviderDraft(provider);
+                        const capability = status?.providers.find(
+                          (item) => item.provider === provider,
+                        );
+                        setModelDraft(capability?.models[0] ?? 'default');
+                      }}
+                      disabled={!activeSession || activeSession.state === 'running'}
+                    >
+                      {status?.providers.map((provider) => (
+                        <option key={provider.provider} value={provider.provider}>
+                          {provider.ready ? '✓' : '×'} {provider.label} · {provider.models.length}{' '}
+                          models
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Model</span>
+                    <select
+                      value={modelDraft}
+                      onChange={(event) => setModelDraft(event.target.value)}
+                      disabled={!activeSession || activeSession.state === 'running'}
+                    >
+                      {modelDraft && !draftCapability?.models.includes(modelDraft) && (
+                        <option value={modelDraft}>{modelDraft}</option>
+                      )}
+                      {draftCapability?.models.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className={draftCapability?.ready ? 'provider-ready' : 'provider-unavailable'}>
+                    {draftCapability?.ready
+                      ? `CLI ready · ${draftCapability.models.length} models discovered`
+                      : (draftCapability?.error ?? 'Unavailable')}
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => void checkProviders()}
+                      disabled={checkingProviders}
+                    >
+                      {checkingProviders ? 'Checking…' : 'Check models'}
+                    </button>
+                    <button
+                      type="button"
+                      className="apply"
+                      onClick={() => void switchProvider()}
+                      disabled={
+                        !activeSession || activeSession.state === 'running' || !modelDraft.trim()
+                      }
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {sidebarPanel === 'reports' && (
+                <div className="flyout-report-v5">
+                  <span>Redacted export</span>
+                  <h2>Session report</h2>
+                  <p>
+                    Export the current scope, audit trail, artifacts, findings, and coverage without
+                    raw secrets.
+                  </p>
+                  {activeSession ? (
+                    <a href={`/api/v1/sessions/${activeSession.id}/export`}>Export report →</a>
+                  ) : (
+                    <div className="flyout-empty-v5">Select a session first.</div>
+                  )}
+                </div>
+              )}
+
+              {sidebarPanel === 'settings' && (
+                <div className="flyout-settings-v5">
+                  <article>
+                    <span>Network</span>
+                    <strong>Loopback only</strong>
+                    <small>127.0.0.1:9099</small>
                   </article>
-                ))}
-                {legacySessions.length === 0 && (
-                  <div className="empty compact">No CLI JSON sessions.</div>
-                )}
-              </div>
-            </details>
+                  <article>
+                    <span>Scope enforcement</span>
+                    <strong>Fail closed</strong>
+                    <small>{status?.scopeEnforcement}</small>
+                  </article>
+                  <article>
+                    <span>Scanner isolation</span>
+                    <strong>Docker profiles</strong>
+                    <small>No host home or credentials mounted</small>
+                  </article>
+                </div>
+              )}
+            </section>
           )}
         </aside>
       )}
@@ -929,7 +1102,11 @@ function App(): React.ReactElement {
             status={status}
             analyzing={analyzingEvidence}
             page={operatorPage}
-            onPageChange={setOperatorPage}
+            onPageChange={(nextPage) => {
+              setOperatorPage(nextPage);
+              setSidebarSection(nextPage === 'run' ? 'operator' : 'artifacts');
+              setSidebarPanel(null);
+            }}
             onProfile={setReconProfile}
             onStart={() => void startRecon()}
             onCancel={() => void cancelTurn()}
@@ -1691,14 +1868,6 @@ function Centered({
     </div>
   );
 }
-function StatusPill({ label, tone }: { label: string; tone: string }): React.ReactElement {
-  return (
-    <span className={`pill ${tone}`}>
-      <i />
-      {label}
-    </span>
-  );
-}
 function formatBytes(value: number): string {
   return value < 1024 ? `${value} B` : `${(value / 1024).toFixed(1)} KB`;
 }
@@ -1786,6 +1955,16 @@ function truncateAnalysisValue(value: unknown): unknown {
   const serialized = JSON.stringify(value);
   if (serialized.length <= 2_000) return value;
   return `${serialized.slice(0, 2_000)}…[truncated]`;
+}
+
+function sidebarPanelTitle(panel: Exclude<SidebarPanel, null>): string {
+  return {
+    sessions: 'Manage sessions',
+    scope: 'Authorized target scope',
+    providers: 'Provider & model',
+    reports: 'Export reports',
+    settings: 'Local security settings',
+  }[panel];
 }
 
 async function createWorkspace(
