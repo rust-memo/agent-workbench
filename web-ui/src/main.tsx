@@ -353,7 +353,7 @@ function App(): React.ReactElement {
           <span className="brand-mark">AW</span>
           <div>
             <strong>Agent Workbench</strong>
-            <small>Local AI Security Workbench · v0.3.0</small>
+            <small>Local AI Security Workbench · v0.3.1</small>
           </div>
         </div>
         <div className="provider-switcher">

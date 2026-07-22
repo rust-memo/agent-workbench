@@ -137,12 +137,11 @@ export class QwenCliClient extends StructuredCliClient {
       cwd,
       input: prompt,
       signal,
-      env: this.environment(),
+      // Qwen's NVM shim uses `#!/usr/bin/env node`; keep the matching Node
+      // runtime ahead of a potentially old system Node on PATH.
+      env: this.environment(dirname(this.binary)),
     });
-    if (result.exitCode !== 0)
-      throw new Error(
-        `Qwen Code exited ${result.exitCode}: ${clean(result.stderr).slice(0, 2000)}`,
-      );
+    if (result.exitCode !== 0) throw new Error(cliFailure('Qwen Code', result));
     const outer = JSON.parse(result.stdout) as unknown;
     const rows = z.array(z.unknown()).parse(outer);
     const terminal = [...rows].reverse().find((row) => isRecord(row) && row.type === 'result');
@@ -181,8 +180,7 @@ export class OpenCodeCliClient extends StructuredCliClient {
       signal,
       env: this.environment(),
     });
-    if (result.exitCode !== 0)
-      throw new Error(`OpenCode exited ${result.exitCode}: ${clean(result.stderr).slice(0, 2000)}`);
+    if (result.exitCode !== 0) throw new Error(cliFailure('OpenCode', result));
     const chunks: string[] = [];
     for (const line of result.stdout.split(/\r?\n/)) {
       if (!line.trim()) continue;
@@ -234,12 +232,23 @@ export class OpenClaudeCliClient extends StructuredCliClient {
       signal,
       env: this.environment(dirname(this.binary)),
     });
-    if (result.exitCode !== 0)
-      throw new Error(
-        `OpenClaude exited ${result.exitCode}: ${clean(result.stderr).slice(0, 2000)}`,
-      );
+    if (result.exitCode !== 0) throw new Error(cliFailure('OpenClaude', result));
     return parseOpenClaudeOutput(result.stdout);
   }
+}
+
+function cliFailure(
+  label: string,
+  result: { exitCode?: number; signal?: string; timedOut?: boolean; stderr?: string },
+): string {
+  const stderr = clean(result.stderr ?? '')
+    .trim()
+    .slice(0, 2000);
+  if (result.timedOut) return `${label} timed out${stderr ? `: ${stderr}` : ''}`;
+  if (result.signal) return `${label} terminated by ${result.signal}${stderr ? `: ${stderr}` : ''}`;
+  if (typeof result.exitCode === 'number')
+    return `${label} exited ${result.exitCode}${stderr ? `: ${stderr}` : ''}`;
+  return `${label} stopped without an exit code${stderr ? `: ${stderr}` : ''}`;
 }
 
 export function parseOpenClaudeOutput(stdout: string): string {

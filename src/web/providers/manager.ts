@@ -1,6 +1,7 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execa } from 'execa';
 import type { Client } from '../../llm/client.js';
 import { OllamaClient } from '../../llm/ollama.js';
@@ -9,7 +10,7 @@ import type { ProviderCapabilities, WebProviderId } from '../types.js';
 import { OpenClaudeCliClient, OpenCodeCliClient, QwenCliClient } from './cli.js';
 
 export class WebProviderManager {
-  readonly qwenPath = process.env.PENTESTERFLOW_QWEN_PATH ?? 'qwen';
+  readonly qwenPath = process.env.PENTESTERFLOW_QWEN_PATH ?? siblingCliPath('qwen');
   readonly openCodePath =
     process.env.PENTESTERFLOW_OPENCODE_PATH ?? join(homedir(), '.opencode', 'bin', 'opencode');
   readonly openClaudePath =
@@ -69,15 +70,13 @@ export class WebProviderManager {
     const probe = await command(this.qwenPath, ['--version']);
     let models = ['default'];
     let discoveryError: string | undefined;
-    if (probe.ready) {
-      try {
-        const settingsPath =
-          process.env.PENTESTERFLOW_QWEN_SETTINGS ?? join(homedir(), '.qwen', 'settings.json');
-        models = modelsFromQwenSettings(JSON.parse(await readFile(settingsPath, 'utf8')));
-        if (models.length === 0) models = ['default'];
-      } catch (error) {
-        discoveryError = `model discovery: ${errorText(error)}`;
-      }
+    try {
+      const settingsPath =
+        process.env.PENTESTERFLOW_QWEN_SETTINGS ?? join(homedir(), '.qwen', 'settings.json');
+      models = modelsFromQwenSettings(JSON.parse(await readFile(settingsPath, 'utf8')));
+      if (models.length === 0) models = ['default'];
+    } catch (error) {
+      discoveryError = `model discovery: ${errorText(error)}`;
     }
     return capability('qwen', 'Qwen Code', probe.ready, probe.version, models, {
       error: probe.error ?? discoveryError,
@@ -245,7 +244,7 @@ async function command(
       env: {
         HOME: homedir(),
         PATH: binary.includes('/')
-          ? `${join(binary, '..')}:${process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'}`
+          ? `${dirname(binary)}:${process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'}`
           : (process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'),
         LANG: 'C.UTF-8',
         NO_COLOR: '1',
@@ -264,10 +263,33 @@ async function command(
   }
 }
 
+/** Prefer a CLI installed beside the Node executable that launched the Web
+ * server. This makes NVM installs work even when the parent shell did not put
+ * that NVM bin directory on PATH. An explicit environment override still wins.
+ */
+export function siblingCliPath(name: string): string {
+  const filename = process.platform === 'win32' ? `${name}.cmd` : name;
+  const candidate = join(dirname(process.execPath), filename);
+  return existsSync(candidate) ? candidate : name;
+}
+
 async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, 'utf8'));
 }
 
 function errorText(error: unknown): string {
-  return clean(error instanceof Error ? error.message : String(error)).slice(0, 1000);
+  if (isRecord(error)) {
+    if (error.code === 'ENOENT') return 'CLI executable was not found';
+    if (error.timedOut === true) return 'CLI health check timed out';
+    if (typeof error.signal === 'string') return `CLI terminated by ${error.signal}`;
+    if (typeof error.exitCode === 'number') {
+      const stderr = typeof error.stderr === 'string' ? clean(error.stderr).trim() : '';
+      return `CLI exited ${error.exitCode}${stderr ? `: ${stderr}` : ''}`.slice(0, 1000);
+    }
+    if (typeof error.shortMessage === 'string') return clean(error.shortMessage).slice(0, 1000);
+  }
+  const message = clean(error instanceof Error ? error.message : String(error));
+  return message
+    .replace(/exit(?:ed with code)? undefined/gi, 'without an exit code')
+    .slice(0, 1000);
 }

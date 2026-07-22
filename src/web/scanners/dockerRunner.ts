@@ -3,7 +3,7 @@ import { execa } from 'execa';
 import type { ScannerLimits } from '../types.js';
 import { clean } from './output.js';
 
-export const SAFE_SCANNER_IMAGE = 'agent-workbench-scanner-safe:0.3.0';
+export const SAFE_SCANNER_IMAGE = 'agent-workbench-scanner-safe:0.3.1';
 
 export type ScannerName = 'subfinder' | 'dnsx' | 'httpx' | 'katana' | 'nuclei';
 

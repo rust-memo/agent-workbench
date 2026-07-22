@@ -1,6 +1,6 @@
 {
   "name": "@pentesterflow/agent",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Local AI security workbench and pentesting CLI with scoped recon, auditable artifacts, and multiple AI providers.",
   "type": "module",
   "bin": {
@@ -23,7 +23,7 @@
     "dev": "tsx src/cli/index.ts",
     "dev:web": "tsx src/web/index.ts",
     "start:web": "node dist/web.js",
-    "scanner:build": "docker build --pull -t agent-workbench-scanner-safe:0.3.0 docker/scanner-safe",
+    "scanner:build": "docker build --pull -t agent-workbench-scanner-safe:0.3.1 docker/scanner-safe",
     "dev:burp": "tsx src/cli/index.ts --burp",
     "test": "vitest run",
     "test:watch": "vitest",

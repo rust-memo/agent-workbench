@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { modelsFromOpenClaudeConfig, modelsFromQwenSettings } from './manager.js';
+import { modelsFromOpenClaudeConfig, modelsFromQwenSettings, siblingCliPath } from './manager.js';
 
 describe('Qwen model discovery', () => {
+  it('finds the Qwen shim beside the active Node runtime when it is installed there', () => {
+    const resolved = siblingCliPath('qwen');
+    expect(
+      resolved === 'qwen' || resolved.endsWith('/qwen') || resolved.endsWith('\\qwen.cmd'),
+    ).toBe(true);
+  });
+
   it('reads the active model and configured provider models without duplicates', () => {
     expect(
       modelsFromQwenSettings({

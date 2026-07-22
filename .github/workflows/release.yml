@@ -1,6 +1,6 @@
 name: release
 
-# Cut a versioned release only by pushing a version tag (e.g. `v0.3.0`).
+# Cut a versioned release only by pushing a version tag (e.g. `v0.3.1`).
 # This keeps ordinary main-branch pushes from creating accidental releases.
 # It can also run from the Actions tab for a dry-run rebuild.
 #
@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag/version to release against (e.g. v0.3.0)'
+        description: 'Tag/version to release against (e.g. v0.3.1)'
         required: true
 
 permissions:

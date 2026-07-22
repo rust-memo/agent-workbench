@@ -16,7 +16,7 @@ control.
 [![license: Apache--2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![stars](https://img.shields.io/github/stars/rust-memo/agent-workbench?style=social)](https://github.com/rust-memo/agent-workbench/stargazers)
 
-**[Install](#install) · [Web Workbench](#local-web-workbench-v030) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
+**[Install](#install) · [Web Workbench](#local-web-workbench-v031) · [Quickstart](#quickstart) · [Lifecycle](#pentest-lifecycle) · [Memory](#continuous-learning) · [Security](#security-model)**
 
 </div>
 
@@ -112,7 +112,7 @@ irm https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.ps1
 Pin a release or choose an install directory:
 
 ```sh
-PENTESTERFLOW_VERSION=v0.3.0 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
+PENTESTERFLOW_VERSION=v0.3.1 PENTESTERFLOW_INSTALL_DIR="$HOME/.local/bin" \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh)"
 ```
 
@@ -153,7 +153,7 @@ pentesterflow --resume <session-id>
 On resume, PentesterFlow automatically shows a recap of the previous session's
 persistent memory so you can continue without manually reconstructing context.
 
-## Local Web Workbench (v0.3.0)
+## Local Web Workbench (v0.3.1)
 
 The Web workbench keeps the existing CLI intact and adds an English-only,
 terminal-style local interface. Web sessions use SQLite as their only source of
@@ -183,11 +183,11 @@ Open the single-use pairing URL printed in the terminal. The fragment is
 exchanged for an HttpOnly, SameSite=Strict session cookie and is removed from
 the browser address bar immediately.
 
-v0.3.0 includes general assistance, Plan and low-impact Recon modes, an
+v0.3.1 includes general assistance, Plan and low-impact Recon modes, an
 Ollama/Qwen Code/OpenCode/OpenClaude provider and checked-model switcher,
 Subfinder, DNSX, HTTPX, Katana, Nuclei, SQLite event replay, cancellation,
 hash-addressed artifacts, approval proposals, Findings, and Coverage. All five
-scanners run in an ephemeral `agent-workbench-scanner-safe:0.3.0` container.
+scanners run in an ephemeral `agent-workbench-scanner-safe:0.3.1` container.
 The server owns the image, entrypoint, flags, network mode, resource limits,
 user, and capabilities; targets are sent through stdin. Scanner containers are
 read-only, non-root, capability-free, `no-new-privileges`, resource-limited,

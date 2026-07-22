@@ -152,7 +152,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       runner.health(),
     ]);
     res.json({
-      version: '0.3.0',
+      version: '0.3.1',
       providers: providerCapabilities,
       scanners,
       recovery,
