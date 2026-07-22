@@ -664,6 +664,16 @@ body.resizing {
   font-size: 6px;
   text-transform: uppercase;
 }
+.tool-fix {
+  padding: 5px 7px;
+  border: 1px solid #8a6535;
+  border-radius: 6px;
+  color: #f0c676;
+  background: #2c2113;
+  cursor: pointer;
+  font-size: 6px;
+  text-transform: uppercase;
+}
 .tool-activity.running .tool-status {
   color: #64dfb2;
   background: #18362b;

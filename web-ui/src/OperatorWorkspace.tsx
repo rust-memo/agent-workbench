@@ -136,7 +136,7 @@ export function OperatorWorkspace({
               disabled={!engagement || running || policyBusy}
               title="Allow Subfinder to query third-party passive data sources"
             >
-              Passive sources {engagement?.scope.allowThirdPartyPassiveSources ? 'ON' : 'OFF'}
+              Subfinder {engagement?.scope.allowThirdPartyPassiveSources ? 'ENABLED' : 'DISABLED'}
             </button>
             <button
               type="button"
@@ -222,7 +222,13 @@ export function OperatorWorkspace({
                   <strong>{item.name}</strong>
                   <small>{item.detail}</small>
                 </div>
-                <span className="tool-status">{item.status.replace('_', ' ')}</span>
+                {item.name === 'subfinder' && item.status === 'skipped' ? (
+                  <button type="button" className="tool-fix" onClick={onStart}>
+                    Enable & rerun
+                  </button>
+                ) : (
+                  <span className="tool-status">{item.status.replace('_', ' ')}</span>
+                )}
               </article>
             ))}
             {toolActivity.length === 0 && (

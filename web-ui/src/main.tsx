@@ -334,8 +334,32 @@ function App(): React.ReactElement {
   };
 
   const startRecon = async (): Promise<void> => {
-    if (!selected) return;
+    if (!selected || !activeEngagement) return;
     try {
+      if (!activeEngagement.scope.allowThirdPartyPassiveSources) {
+        const enable = window.confirm(
+          'Subfinder is disabled for this scope.\n\nPress OK to enable third-party passive sources and start the finder. The authorized root domain may be sent to passive data providers.\n\nPress Cancel to choose whether to run without Subfinder.',
+        );
+        if (enable) {
+          setUpdatingScopePolicy(true);
+          const updated = await api<Engagement>(
+            `/engagements/${activeEngagement.id}/scope-policy`,
+            {
+              method: 'PATCH',
+              body: JSON.stringify({ allowThirdPartyPassiveSources: true }),
+            },
+          );
+          setEngagements((current) =>
+            current.map((engagement) => (engagement.id === updated.id ? updated : engagement)),
+          );
+        } else if (
+          !window.confirm(
+            'Start without Subfinder? Passive discovery will be marked skipped for this run.',
+          )
+        ) {
+          return;
+        }
+      }
       await api(`/sessions/${selected}/recon-runs`, {
         method: 'POST',
         body: JSON.stringify({ profile: reconProfile }),
@@ -344,6 +368,8 @@ function App(): React.ReactElement {
       setError('');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setUpdatingScopePolicy(false);
     }
   };
 
@@ -1208,7 +1234,7 @@ function ReconWorkspace({
             onClick={onTogglePassive}
             disabled={!engagement || running || policyBusy}
           >
-            Passive {engagement?.scope.allowThirdPartyPassiveSources ? 'ON' : 'OFF'}
+            Subfinder {engagement?.scope.allowThirdPartyPassiveSources ? 'ENABLED' : 'DISABLED'}
           </button>
           <button
             type="button"
@@ -1493,7 +1519,7 @@ function NewReconScope({
             checked={passive}
             onChange={(event) => setPassive(event.target.checked)}
           />
-          Allow third-party passive sources
+          Enable Subfinder passive discovery (uses third-party sources)
         </label>
         <label className="check-field">
           <input
