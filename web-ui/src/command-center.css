@@ -1541,6 +1541,565 @@
   }
 }
 
+/* Recon Console v7 -------------------------------------------------------
+ * Transcript-first interaction inspired by the operator reference. Every
+ * line is backed by a persisted runtime event; controls remain compact and
+ * advanced surfaces are disclosed only when requested. */
+.terminal-panel.recon-layout {
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+  background: radial-gradient(circle at 55% -28%, #0736573b, transparent 42%), #020911;
+}
+
+.terminal-panel.recon-layout > .panel-head {
+  display: none;
+}
+
+.recon-console-v7 {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 72px auto minmax(0, 1fr);
+  overflow: hidden;
+  margin: 18px 20px 10px;
+  border: 1px solid #087fc0;
+  border-radius: 14px;
+  background: radial-gradient(circle at 85% 0, #073c5a25, transparent 34%), #030c14;
+  box-shadow: 0 0 0 1px #09324c, 0 0 28px #008ed521, inset 0 1px #ffffff0a;
+}
+
+.recon-console-head-v7 {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 22px;
+  border-bottom: 1px solid #173a51;
+  background: #06121cdb;
+}
+
+.recon-console-title-v7,
+.recon-console-view-v7,
+.recon-console-counts-v7 {
+  display: flex;
+  align-items: center;
+}
+
+.recon-console-title-v7 {
+  min-width: 0;
+  gap: 13px;
+}
+
+.recon-console-title-v7 > i {
+  width: 37px;
+  height: 41px;
+  display: grid;
+  place-items: center;
+  clip-path: polygon(50% 0, 94% 24%, 86% 77%, 50% 100%, 14% 77%, 6% 24%);
+  color: #b4edff;
+  background: linear-gradient(145deg, #007ec5, #083b62);
+  font-style: normal;
+  font-size: 18px;
+}
+
+.recon-console-title-v7 > strong {
+  color: #f1f5f7;
+  font-size: 21px;
+  white-space: nowrap;
+}
+
+.recon-console-title-v7 > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: 9px;
+  color: #87a0b1;
+  font-size: 14px;
+}
+
+.recon-console-title-v7 > span b {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #7290a2;
+}
+
+.recon-console-title-v7 > span.streaming {
+  color: #38e999;
+}
+
+.recon-console-title-v7 > span.streaming b {
+  background: #20dd83;
+  box-shadow: 0 0 12px #1fe487;
+  animation: console-pulse-v7 1.4s ease-in-out infinite;
+}
+
+@keyframes console-pulse-v7 {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.recon-console-view-v7 {
+  gap: 14px;
+}
+
+.recon-console-view-v7 label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #c0cbd2;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.recon-console-view-v7 label input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.recon-console-view-v7 label i {
+  width: 43px;
+  height: 24px;
+  position: relative;
+  border: 1px solid #205270;
+  border-radius: 999px;
+  background: #0b2434;
+}
+
+.recon-console-view-v7 label i::after {
+  content: "";
+  width: 16px;
+  height: 16px;
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  border-radius: 50%;
+  background: #7b93a3;
+  transition: transform .18s ease, background .18s ease;
+}
+
+.recon-console-view-v7 label input:checked + i {
+  border-color: #1475cb;
+  background: #0a4891;
+}
+
+.recon-console-view-v7 label input:checked + i::after {
+  transform: translateX(18px);
+  background: #fff;
+}
+
+.recon-console-view-v7 > button {
+  width: 35px;
+  height: 35px;
+  border: 0;
+  color: #a8b8c3;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.recon-console-bar-v7 {
+  min-width: 0;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) 112px auto auto 38px 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-bottom: 1px solid #17354a;
+  background: #06111a;
+}
+
+.recon-console-scope-v7 {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, auto) auto;
+  align-items: baseline;
+  justify-content: start;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.recon-console-scope-v7 span,
+.recon-console-profile-v7 span {
+  color: #59768a;
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.recon-console-scope-v7 strong {
+  overflow: hidden;
+  color: #cfdae1;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recon-console-scope-v7 small {
+  color: #42cda0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.recon-console-profile-v7 {
+  display: grid;
+  gap: 3px;
+}
+
+.recon-console-profile-v7 select {
+  height: 30px;
+  border: 1px solid #1c4058;
+  border-radius: 6px;
+  color: #b6c7d2;
+  background: #071a27;
+  font-size: 13px;
+}
+
+.recon-console-counts-v7 {
+  gap: 9px;
+}
+
+.recon-console-counts-v7 button,
+.recon-console-counts-v7 > span,
+.recon-console-start-v7,
+.recon-console-stop-v7,
+.recon-console-refresh-v7,
+.recon-console-advanced-v7 > summary {
+  height: 32px;
+  border: 1px solid #1b3d54;
+  border-radius: 6px;
+  color: #879eae;
+  background: #071721;
+  font-size: 12px;
+}
+
+.recon-console-counts-v7 button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  cursor: pointer;
+}
+
+.recon-console-counts-v7 button.active {
+  border-color: #117ab0;
+  color: #b7eaff;
+  background: #092b3f;
+}
+
+.recon-console-counts-v7 button b {
+  min-width: 18px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  color: #70d7ff;
+  background: #0d3850;
+  font-size: 10px;
+}
+
+.recon-console-counts-v7 > span {
+  display: grid;
+  place-items: center;
+  padding: 0 9px;
+  border-color: transparent;
+  background: transparent;
+  white-space: nowrap;
+}
+
+.recon-console-start-v7,
+.recon-console-stop-v7,
+.recon-console-refresh-v7 {
+  cursor: pointer;
+}
+
+.recon-console-start-v7 {
+  min-width: 100px;
+  border-color: #12a55e;
+  color: #03130a;
+  background: linear-gradient(#3ee590, #1fc573);
+  font-weight: 700;
+}
+
+.recon-console-stop-v7 {
+  min-width: 82px;
+  border-color: #9d3f48;
+  color: #ffc0c4;
+  background: #43191e;
+}
+
+.recon-console-start-v7:disabled,
+.recon-console-stop-v7:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.recon-console-refresh-v7 {
+  font-size: 16px;
+}
+
+.recon-console-advanced-v7 {
+  position: relative;
+}
+
+.recon-console-advanced-v7 > summary {
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.recon-console-advanced-v7 > summary::-webkit-details-marker {
+  display: none;
+}
+
+.recon-console-advanced-v7 > div {
+  position: fixed;
+  z-index: 220;
+  inset: 74px 34px 96px max(270px, calc(var(--sidebar-width, 232px) + 24px));
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #1478ae;
+  border-radius: 12px;
+  background: #040d15f5;
+  box-shadow: 0 24px 80px #000d, 0 0 30px #008ed526;
+  backdrop-filter: blur(18px);
+}
+
+.recon-console-advanced-v7 > div > .recon-board-v6 {
+  min-height: 100%;
+  border: 1px solid #173a52;
+  border-radius: 9px;
+}
+
+.recon-console-v7 > .new-scope {
+  position: relative;
+  z-index: 2;
+  border-bottom-color: #17354a;
+  background: #06111a;
+}
+
+.recon-console-log-v7 {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 22px 34px;
+  scrollbar-color: #17435d transparent;
+  scrollbar-width: thin;
+}
+
+.recon-transcript-line-v7,
+.recon-console-cursor-v7,
+.recon-inline-approval-v7 {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 112px 94px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 3px 0;
+  font: 14px / 1.55 "Cascadia Code", "Courier New", monospace;
+}
+
+.recon-transcript-line-v7 time,
+.recon-console-cursor-v7 time,
+.recon-inline-approval-v7 > time {
+  color: #9cabb6;
+  white-space: nowrap;
+}
+
+.recon-transcript-line-v7 > span,
+.recon-console-cursor-v7 > span,
+.recon-inline-approval-v7 > span {
+  font-weight: 700;
+  text-transform: lowercase;
+}
+
+.recon-transcript-line-v7 > p,
+.recon-transcript-line-v7 > pre,
+.recon-console-cursor-v7 > p {
+  min-width: 0;
+  margin: 0;
+  color: #c6d0d6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font: inherit;
+}
+
+.recon-transcript-line-v7 > span.system,
+.recon-console-cursor-v7 > span {
+  color: #1e9ff2;
+}
+
+.recon-transcript-line-v7 > span.target {
+  color: #ce78e8;
+}
+
+.recon-transcript-line-v7 > span.recon {
+  color: #39df79;
+}
+
+.recon-transcript-line-v7 > span.scan {
+  color: #1bc7f1;
+}
+
+.recon-transcript-line-v7 > span.approval,
+.recon-inline-approval-v7 > span {
+  color: #ff9d18;
+}
+
+.recon-transcript-line-v7 > span.artifact {
+  color: #c87ee8;
+}
+
+.recon-transcript-line-v7 > span.validation {
+  color: #ffc02d;
+}
+
+.recon-transcript-line-v7 > span.ai {
+  color: #67c7ff;
+}
+
+.recon-console-welcome-v7 {
+  margin-bottom: 12px;
+}
+
+.recon-inline-approval-v7 {
+  margin: 9px 0;
+}
+
+.recon-inline-approval-v7 > div {
+  padding: 10px 13px;
+  border: 1px solid #704e19;
+  border-left: 3px solid #f3a51d;
+  border-radius: 6px;
+  background: #241b0e;
+}
+
+.recon-inline-approval-v7 strong {
+  color: #f3ddad;
+  font-size: 14px;
+}
+
+.recon-inline-approval-v7 p,
+.recon-inline-approval-v7 code {
+  display: block;
+  margin: 5px 0 0;
+  color: #b6a886;
+  font: 12px / 1.5 "Cascadia Code", "Courier New", monospace;
+}
+
+.recon-inline-approval-v7 > div > div {
+  display: flex;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.recon-inline-approval-v7 button {
+  height: 31px;
+  padding: 0 10px;
+  border: 1px solid #168754;
+  border-radius: 5px;
+  color: #baf5d4;
+  background: #0d462f;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.recon-inline-approval-v7 button.deny {
+  border-color: #8c3940;
+  color: #ffc1c6;
+  background: #41191e;
+}
+
+.recon-console-cursor-v7 > p > span {
+  color: #47dca7;
+  animation: console-cursor-v7 .8s steps(1) infinite;
+}
+
+@keyframes console-cursor-v7 {
+  50% {
+    opacity: 0;
+  }
+}
+
+.terminal-panel.recon-layout > .composer-wrap {
+  position: relative;
+  z-index: 3;
+}
+
+.terminal-panel.recon-layout .composer {
+  min-height: 64px;
+  margin: 0 20px 16px;
+  border-color: #145478;
+  border-radius: 10px;
+  background: #06121d;
+  box-shadow: 0 0 0 1px #082d45, 0 12px 34px #0008;
+}
+
+.terminal-panel.recon-layout .composer textarea {
+  font-family: "Cascadia Code", "Courier New", monospace;
+  font-size: 15px;
+}
+
+.terminal-panel.recon-layout .composer button {
+  width: 52px;
+  height: 42px;
+  overflow: hidden;
+  color: transparent;
+  background: #0b2639;
+  font-size: 0;
+}
+
+.terminal-panel.recon-layout .composer button::after {
+  content: "➤";
+  color: #9db2c2;
+  font-size: 22px;
+}
+
+.recon-console-v7.focus {
+  position: fixed;
+  z-index: 300;
+  inset: 18px 18px 98px;
+  margin: 0;
+  background: #020a12;
+  box-shadow: 0 0 0 100vmax #01060bec, 0 0 36px #008fd62b;
+}
+
+body:has(.recon-console-v7.focus) .terminal-panel.recon-layout > .composer-wrap {
+  position: fixed;
+  z-index: 301;
+  right: 18px;
+  bottom: 0;
+  left: 18px;
+}
+
+body:has(.recon-console-v7.focus) .terminal-panel.recon-layout .composer {
+  margin: 0 0 18px;
+}
+
+@media (max-width: 1100px) {
+  .recon-console-v7 {
+    margin-right: 12px;
+    margin-left: 12px;
+  }
+
+  .recon-console-bar-v7 {
+    grid-template-columns: minmax(170px, 1fr) 100px auto 38px 38px;
+  }
+
+  .recon-console-counts-v7 > span {
+    display: none;
+  }
+
+  .recon-transcript-line-v7,
+  .recon-console-cursor-v7,
+  .recon-inline-approval-v7 {
+    grid-template-columns: 98px 82px minmax(0, 1fr);
+    font-size: 13px;
+  }
+}
+
 /* Expanded operations rail based on reference panel 3. */
 .mission-body {
   grid-template-columns: minmax(440px, 1fr) minmax(350px, 390px);
@@ -2822,4 +3381,15 @@ select,
   .recon-settings-v6 .scope-policy-buttons p {
     grid-column: 1 / -1;
   }
+}
+
+/* Keep the transcript-first console as the active Recon layout after the
+ * optional advanced-board compatibility styles above. */
+.terminal-panel.recon-layout {
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.terminal-panel.recon-layout > .panel-head {
+  display: none;
 }

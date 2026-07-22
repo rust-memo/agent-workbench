@@ -1178,10 +1178,21 @@ function App(): React.ReactElement {
               profile={reconProfile}
               setProfile={setReconProfile}
               skills={skills}
+              events={visibleEvents}
+              proposals={proposals}
+              artifactCount={artifacts.length}
+              findingCount={findings.length}
               provider={providerDraft}
               model={modelDraft || 'default'}
               onStart={() => void startRecon()}
+              onCancel={() => void cancelTurn()}
               onRefresh={() => selected && void refreshSessionData(selected)}
+              onApprove={(proposal) => void approveAction(proposal)}
+              onReject={(proposal) => void rejectAction(proposal)}
+              onToggleReview={() => setReconInspectorOpen((current) => !current)}
+              reviewOpen={reconInspectorOpen}
+              compact={terminalCompact}
+              cancelling={cancellingSession === selected}
               onCreated={async (sessionId) => {
                 await refresh();
                 setSelected(sessionId);
@@ -1204,20 +1215,6 @@ function App(): React.ReactElement {
                 })
               }
             />
-            <div className="terminal" role="log" aria-live="polite">
-              {visibleEvents.length === 0 && (
-                <div className="terminal-empty">
-                  <span>&gt;_</span>
-                  <p>
-                    Events, model output, tool calls, saves, and cancellation status appear here in
-                    real time.
-                  </p>
-                </div>
-              )}
-              {visibleEvents.slice(terminalCompact ? -20 : -60).map((event) => (
-                <EventLine key={event.eventId} event={event} />
-              ))}
-            </div>
           </>
         )}
         <div className="composer-wrap">
@@ -1420,6 +1417,341 @@ function App(): React.ReactElement {
 }
 
 function ReconWorkspace({
+  engagement,
+  session,
+  runs,
+  profile,
+  setProfile,
+  skills,
+  events,
+  proposals,
+  artifactCount,
+  findingCount,
+  provider,
+  model,
+  onStart,
+  onCancel,
+  onRefresh,
+  onCreated,
+  onLoadSkill,
+  onUpdateInsight,
+  onError,
+  onApprove,
+  onReject,
+  onToggleReview,
+  reviewOpen,
+  compact,
+  cancelling,
+  policyBusy,
+  onTogglePassive,
+  onToggleSubdomains,
+}: {
+  engagement?: Engagement;
+  session?: Session;
+  runs: ReconRun[];
+  profile: ReconRun['profile'];
+  setProfile: (profile: ReconRun['profile']) => void;
+  skills: WorkbenchSkill[];
+  events: RuntimeEvent[];
+  proposals: ActionProposal[];
+  artifactCount: number;
+  findingCount: number;
+  provider: Session['provider'];
+  model: string;
+  onStart: () => void;
+  onCancel: () => void;
+  onRefresh: () => void;
+  onCreated: (sessionId: string) => Promise<void>;
+  onLoadSkill: (name: string, target?: string) => void;
+  onUpdateInsight: (insight: ReconInsight, status: ReconInsight['status']) => void;
+  onError: (message: string) => void;
+  onApprove: (proposal: ActionProposal) => void;
+  onReject: (proposal: ActionProposal) => void;
+  onToggleReview: () => void;
+  reviewOpen: boolean;
+  compact: boolean;
+  cancelling: boolean;
+  policyBusy: boolean;
+  onTogglePassive: () => void;
+  onToggleSubdomains: () => void;
+}): React.ReactElement {
+  const latest = runs[0];
+  const running = session?.state === 'running' || latest?.status === 'running';
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [focusMode, setFocusMode] = useState(false);
+  const logRef = useRef<HTMLDivElement>(null);
+  const pending = proposals.filter((proposal) => proposal.status === 'pending');
+  const displayEvents = events.slice(compact ? -30 : -120);
+  const activityCount = displayEvents.length + pending.length;
+
+  useEffect(() => {
+    if (!autoScroll || !logRef.current) return;
+    logRef.current.dataset.activityCount = String(activityCount);
+    logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [activityCount, autoScroll]);
+
+  const now = new Date().toLocaleTimeString([], { hour12: false });
+  return (
+    <section className={`recon-console-v7 ${focusMode ? 'focus' : ''}`}>
+      <header className="recon-console-head-v7">
+        <div className="recon-console-title-v7">
+          <i>⌘</i>
+          <strong>Session Transcript</strong>
+          <span className={running ? 'streaming' : 'ready'}>
+            <b /> {running ? 'Streaming' : 'Ready'}
+          </span>
+        </div>
+        <div className="recon-console-view-v7">
+          <label>
+            Auto-scroll
+            <input
+              type="checkbox"
+              checked={autoScroll}
+              onChange={(event) => setAutoScroll(event.target.checked)}
+            />
+            <i />
+          </label>
+          <button
+            type="button"
+            onClick={() => setFocusMode((current) => !current)}
+            aria-label={focusMode ? 'Exit focus mode' : 'Open focus mode'}
+            title={focusMode ? 'Exit focus mode' : 'Focus mode'}
+          >
+            {focusMode ? '↙' : '↗'}
+          </button>
+        </div>
+      </header>
+
+      <div className="recon-console-bar-v7">
+        <div className="recon-console-scope-v7">
+          <span>Target</span>
+          <strong>{engagement?.scope.allowedHosts[0] ?? 'No authorized scope'}</strong>
+          {engagement && <small>Scope v{engagement.scope.version}</small>}
+        </div>
+        <label className="recon-console-profile-v7">
+          <span>Profile</span>
+          <select
+            value={profile}
+            onChange={(event) => setProfile(event.target.value as ReconRun['profile'])}
+            disabled={!session || running}
+          >
+            <option value="quick">Quick</option>
+            <option value="standard">Standard</option>
+            <option value="advanced">Advanced</option>
+          </select>
+        </label>
+        <div className="recon-console-counts-v7">
+          <button type="button" className={reviewOpen ? 'active' : ''} onClick={onToggleReview}>
+            Review <b>{pending.length + findingCount}</b>
+          </button>
+          <span>{artifactCount} artifacts</span>
+        </div>
+        {running ? (
+          <button
+            type="button"
+            className="recon-console-stop-v7"
+            onClick={onCancel}
+            disabled={cancelling}
+          >
+            {cancelling ? 'Cancelling…' : 'Stop'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="recon-console-start-v7"
+            onClick={onStart}
+            disabled={!session || engagement?.mode !== 'RECON'}
+          >
+            Start recon
+          </button>
+        )}
+        <button type="button" className="recon-console-refresh-v7" onClick={onRefresh}>
+          ↻
+        </button>
+        <details className="recon-console-advanced-v7">
+          <summary title="Scope, policies, and playbooks">•••</summary>
+          <div>
+            <ReconBoardControls
+              engagement={engagement}
+              session={session}
+              runs={runs}
+              profile={profile}
+              setProfile={setProfile}
+              skills={skills}
+              provider={provider}
+              model={model}
+              onStart={onStart}
+              onRefresh={onRefresh}
+              onCreated={onCreated}
+              onLoadSkill={onLoadSkill}
+              onUpdateInsight={onUpdateInsight}
+              onError={onError}
+              policyBusy={policyBusy}
+              onTogglePassive={onTogglePassive}
+              onToggleSubdomains={onToggleSubdomains}
+            />
+          </div>
+        </details>
+      </div>
+
+      {!session && (
+        <NewReconScope
+          provider={provider}
+          model={model}
+          initiallyOpen
+          onCreated={onCreated}
+          onError={onError}
+        />
+      )}
+
+      <div className="recon-console-log-v7" ref={logRef} role="log" aria-live="polite">
+        {displayEvents.length === 0 && session && (
+          <div className="recon-console-welcome-v7">
+            <ReconStaticLine time={now} category="system">
+              Session ready · Agent Workbench
+            </ReconStaticLine>
+            <ReconStaticLine time={now} category="target">
+              Target set to {engagement?.scope.allowedHosts[0] ?? 'authorized scope'}
+            </ReconStaticLine>
+            <ReconStaticLine time={now} category="system">
+              Session ID: {session.id.slice(0, 12)} · Mode: RECON
+            </ReconStaticLine>
+            <ReconStaticLine time={now} category="recon">
+              Ready to initialize scoped discovery modules
+            </ReconStaticLine>
+          </div>
+        )}
+
+        {displayEvents.map((event) => (
+          <ReconTranscriptLine key={event.eventId} event={event} />
+        ))}
+
+        {pending.map((proposal) => (
+          <article className="recon-inline-approval-v7" key={proposal.id}>
+            <time>[{new Date(proposal.expiresAt).toLocaleTimeString()}]</time>
+            <span>approval</span>
+            <div>
+              <strong>Approval required to run {proposal.action}</strong>
+              <p>{proposal.reason}</p>
+              <code>
+                Risk: {proposal.risk} · {proposal.approvalHash.slice(0, 12)}…
+              </code>
+              <div>
+                <button type="button" onClick={() => onApprove(proposal)}>
+                  ✓ Approve once
+                </button>
+                <button type="button" className="deny" onClick={() => onReject(proposal)}>
+                  Decline
+                </button>
+              </div>
+            </div>
+          </article>
+        ))}
+
+        {running && (
+          <div className="recon-console-cursor-v7">
+            <time>[{now}]</time>
+            <span>system</span>
+            <p>
+              Operation in progress<span>_</span>
+            </p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ReconStaticLine({
+  time,
+  category,
+  children,
+}: {
+  time: string;
+  category: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <div className="recon-transcript-line-v7">
+      <time>[{time}]</time>
+      <span className={category}>{category}</span>
+      <p>{children}</p>
+    </div>
+  );
+}
+
+function ReconTranscriptLine({ event }: { event: RuntimeEvent }): React.ReactElement {
+  const category = reconEventCategory(event);
+  return (
+    <div className="recon-transcript-line-v7">
+      <time>[{new Date(event.createdAt).toLocaleTimeString()}]</time>
+      <span className={category}>{category}</span>
+      <pre>{runtimeEventText(event)}</pre>
+    </div>
+  );
+}
+
+function reconEventCategory(event: RuntimeEvent): string {
+  if (event.type.includes('artifact')) return 'artifact';
+  if (event.type.includes('approval') || event.type.includes('proposal')) return 'approval';
+  if (event.type.includes('finding') || event.type.includes('validation')) return 'validation';
+  if (event.type.includes('tool') || event.type.includes('action')) return 'scan';
+  if (event.type.includes('recon')) return 'recon';
+  if (event.type.includes('assistant') || event.type.includes('provider')) return 'ai';
+  if (event.type.includes('scope') || event.type.includes('target')) return 'target';
+  return 'system';
+}
+
+function runtimeEventText(event: RuntimeEvent): string {
+  const payload = event.payload;
+  const label = typeof payload.label === 'string' ? payload.label : humanize(event.type);
+  const metrics =
+    typeof payload.metrics === 'object' && payload.metrics !== null
+      ? (payload.metrics as Record<string, unknown>)
+      : undefined;
+  if (event.type === 'recon.run.started')
+    return `Recon run started · ${String(payload.profile ?? 'standard')} profile`;
+  if (event.type === 'recon.step.running') return `Starting ${label}…`;
+  if (event.type === 'recon.step.completed')
+    return `${label} complete${metrics && Object.keys(metrics).length > 0 ? ` · ${formatMetrics(metrics)}` : ''}`;
+  if (event.type === 'recon.step.skipped')
+    return `${label} skipped · ${String(payload.detail ?? 'not enabled for this scope')}`;
+  if (event.type === 'recon.step.failed')
+    return `${label} failed · ${String(payload.error ?? payload.detail ?? 'scanner error')}`;
+  if (event.type === 'recon.run.completed') {
+    const summary =
+      typeof payload.summary === 'object' && payload.summary !== null
+        ? (payload.summary as Record<string, unknown>)
+        : {};
+    return `Recon complete${Object.keys(summary).length > 0 ? ` · ${formatMetrics(summary)}` : ''}`;
+  }
+  if (event.type === 'artifact.saved')
+    return `Saved ${String(payload.filename ?? payload.kind ?? 'evidence')} · ${formatBytes(Number(payload.size) || 0)} · sha256 ${String(payload.sha256 ?? '').slice(0, 12)}…`;
+  if (event.type.includes('proposal'))
+    return `${String(payload.action ?? 'Action')} requires approval · ${String(payload.reason ?? payload.risk ?? '')}`;
+  if (event.type.startsWith('action.'))
+    return `${humanize(event.type)}${payload.action ? ` · ${String(payload.action)}` : ''}`;
+  if (event.type === 'turn.finished') return `Turn ${String(payload.status ?? 'completed')}`;
+  if (event.type === 'provider.cloud-preview')
+    return `Redacted payload dispatched · ${String(payload.provider)} / ${String(payload.model)} · ${formatBytes(Number(payload.bytes) || 0)} · ${Number(payload.redactionCount) || 0} redactions`;
+  if (typeof payload.text === 'string') return payload.text;
+  if (typeof payload.result === 'string') return payload.result;
+  if (typeof payload.error === 'string') return payload.error;
+  if (event.type === 'turn.started' && typeof payload.message === 'string') return payload.message;
+  const compactPayload = Object.entries(payload)
+    .filter(([key]) => !/(?:id|hash|path|token)$/i.test(key))
+    .slice(0, 3)
+    .map(([key, value]) => {
+      if (typeof value === 'object' && value !== null)
+        return `${humanize(key)} ${formatMetrics(value as Record<string, unknown>)}`;
+      const rendered = String(value);
+      return `${humanize(key)} ${rendered.length > 90 ? `${rendered.slice(0, 87)}…` : rendered}`;
+    })
+    .join(' · ');
+  return compactPayload || humanize(event.type);
+}
+
+function ReconBoardControls({
   engagement,
   session,
   runs,
@@ -1850,41 +2182,6 @@ function humanize(value: string): string {
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .replace(/[-_]/g, ' ')
     .toLowerCase();
-}
-
-function EventLine({ event }: { event: RuntimeEvent }): React.ReactElement {
-  const payload = event.payload;
-  const text =
-    event.type === 'provider.cloud-preview'
-      ? `Redacted payload dispatched · ${String(payload.provider)} / ${String(payload.model)} · ${formatBytes(Number(payload.bytes) || 0)} · ${Number(payload.redactionCount) || 0} redactions · sha256 ${String(payload.sha256).slice(0, 16)}…`
-      : typeof payload.text === 'string'
-        ? payload.text
-        : typeof payload.result === 'string'
-          ? payload.result
-          : typeof payload.error === 'string'
-            ? payload.error
-            : event.type === 'turn.started' && typeof payload.message === 'string'
-              ? payload.message
-              : JSON.stringify(payload);
-  const kind =
-    event.type.includes('error') || payload.level === 'error'
-      ? 'error'
-      : event.type.includes('tool')
-        ? 'tool'
-        : event.type.includes('artifact')
-          ? 'save'
-          : event.type.includes('assistant')
-            ? 'assistant'
-            : 'system';
-  return (
-    <div className={`event-line ${kind}`}>
-      <div className="event-meta">
-        <time>{new Date(event.createdAt).toLocaleTimeString()}</time>
-        <span>{event.type}</span>
-      </div>
-      <pre>{text}</pre>
-    </div>
-  );
 }
 
 function ArtifactCard({ artifact }: { artifact: Artifact }): React.ReactElement {

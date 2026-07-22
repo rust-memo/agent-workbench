@@ -221,15 +221,16 @@ user, and capabilities; targets are sent through stdin. Safe scanner containers
 are read-only, non-root, capability-free, `no-new-privileges`, resource-limited,
 and receive no host mounts, Docker socket, home directory, or AI credentials.
 
-Use the workspace switcher to move between the calm, full-width **Recon Board**
-and **AI Operator** workspace. Recon Board keeps only the authorized scope, run
-path, live signals, and audit output visible by default; its review queue,
-scanner details, policy controls, and playbooks open on demand. The AI Operator
-**Run** page keeps the active operation, pipeline progress, next steps, AI brief,
-and permission gate focused in one uncluttered view. **Output & Evidence**
-separates the live event stream from tool activity, artifacts, findings,
-coverage, and scanner health. The Recon inspector and legacy JSON importer
-remain available without permanently occupying workspace space.
+Use the workspace switcher to move between the full-width **Recon Board** and
+**AI Operator** workspace. Recon Board is a transcript-first console: persisted
+runtime events stream into color-coded system, recon, scan, approval, artifact,
+validation, and AI lines. Auto-scroll follows live work, Focus mode expands the
+console and command input, and pending scanner approvals can be accepted or
+declined inline. Scope policy, playbooks, and the detailed review inspector open
+only on demand. The AI Operator **Run** page keeps the active operation,
+pipeline progress, next steps, AI brief, and permission gate focused in one
+uncluttered view. **Output & Evidence** separates the live event stream from
+tool activity, artifacts, findings, coverage, and scanner health.
 
 The rebuilt command-center UI uses a compact navigation rail for **AI Operator**,
 **Output & Evidence**, and **Recon Board**; live Target/Mode/Provider/Scanner
