@@ -75,12 +75,16 @@ export interface WorkbenchSkill {
 }
 export interface Artifact {
   id: string;
+  engagementId?: string;
   sessionId: string;
+  turnId?: string;
   kind: string;
   filename: string;
+  mediaType?: string;
   size: number;
   sha256: string;
   status: string;
+  metadata?: Record<string, unknown>;
   createdAt: string;
 }
 export interface ActionProposal {
@@ -156,6 +160,135 @@ export interface ReconRun {
   createdAt: string;
   steps: ReconStep[];
   insights: ReconInsight[];
+}
+
+export interface ReconAssetSource {
+  id: string;
+  tool: string;
+  runId: string;
+  toolRunId: string;
+  artifactId?: string;
+  rawValue: string;
+  discoveredAt: string;
+}
+
+export interface ReconAsset {
+  id: string;
+  runId: string;
+  value: string;
+  normalizedValue: string;
+  type: 'domain' | 'subdomain' | 'url' | 'ip';
+  sources: ReconAssetSource[];
+  inScope: boolean;
+  activeTestingAllowed: boolean;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  dns?: { resolved: boolean; addresses: string[]; cname?: string };
+  http?: {
+    probed: boolean;
+    live: boolean;
+    finalUrl?: string;
+    statusCode?: number;
+    title?: string;
+    technologies?: string[];
+    contentType?: string;
+    webServer?: string;
+  };
+}
+
+export interface ReconToolRun {
+  id: string;
+  reconRunId: string;
+  tool: string;
+  actionName: string;
+  status: 'queued' | 'running' | 'saving' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
+  startedAt?: string;
+  endedAt?: string;
+  exitCode?: number;
+  rawResults: number;
+  validResults: number;
+  uniqueResults: number;
+  artifactIds: string[];
+  error?: string;
+  partialStdout?: string;
+  partialStderr?: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface ReconHttpResult {
+  id: string;
+  assetId: string;
+  input: string;
+  url: string;
+  host: string;
+  port?: number;
+  scheme?: string;
+  statusCode?: number;
+  contentLength?: number;
+  title?: string;
+  technologies: string[];
+  webServer?: string;
+  contentType?: string;
+  finalUrl?: string;
+  ip?: string;
+  cname?: string;
+  responseTime?: string;
+}
+
+export interface ReconArtifactLink {
+  id: string;
+  runId: string;
+  toolRunId?: string;
+  artifactId: string;
+  role: string;
+}
+
+export interface AssetInterest {
+  id: string;
+  assetId: string;
+  score: number;
+  reasons: string[];
+  markedBy: 'user' | 'ai';
+  reviewStatus: 'new' | 'reviewing' | 'dismissed' | 'promoted';
+}
+
+export interface ReconResultsResponse {
+  run: ReconRun | null;
+  toolRuns: ReconToolRun[];
+  assets: ReconAsset[];
+  httpResults: ReconHttpResult[];
+  artifactLinks: ReconArtifactLink[];
+  interests: Record<string, AssetInterest[]>;
+}
+
+export interface AIReview {
+  id: string;
+  runId?: string;
+  status: 'pending_approval' | 'running' | 'completed' | 'failed' | 'cancelled';
+  provider: Session['provider'];
+  model: string;
+  objective: string;
+  inputArtifactIds: string[];
+  inputAssetIds: string[];
+  inputHashes: string[];
+  redactedPreview: string;
+  payloadBytes: number;
+  responseArtifactId?: string;
+  error?: string;
+  artifactNames?: string[];
+  assetCount?: number;
+  createdAt: string;
+}
+
+export interface ArtifactContent {
+  artifact: Artifact;
+  view: 'redacted' | 'raw';
+  startLine: number;
+  totalLines: number;
+  hasMore: boolean;
+  lines: Array<{ number: number; text: string }>;
+  matches: number[];
+  matchesTruncated: boolean;
 }
 
 let csrfToken = '';

@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { execa } from 'execa';
+import type { ReconToolDefinition } from '../recon/toolRegistry.js';
 import type { ScannerLimits } from '../types.js';
+import type { ScopeDefinition } from '../types.js';
 import { clean } from './output.js';
 
-export const SAFE_SCANNER_IMAGE = 'agent-workbench-scanner-safe:0.5.0';
-export const RAW_SCANNER_IMAGE = 'agent-workbench-scanner-raw:0.5.0';
+export const SAFE_SCANNER_IMAGE = 'agent-workbench-scanner-safe:0.6.0';
+export const RAW_SCANNER_IMAGE = 'agent-workbench-scanner-raw:0.6.0';
 
 export type ScannerName =
   | 'subfinder'
+  | 'crtsh'
   | 'dnsx'
   | 'httpx'
   | 'katana'
@@ -23,6 +26,8 @@ export interface ScannerResult {
   exitCode: number;
   profile: 'safe' | 'raw';
   image: string;
+  termination?: 'exit' | 'timed_out' | 'cancelled' | 'output_limit' | 'start_failed';
+  error?: string;
 }
 
 export interface ScannerHealth {
@@ -51,6 +56,39 @@ export class DockerScannerRunner {
     return this.rawEnabled;
   }
 
+  async trustedReconTool(
+    definition: ReconToolDefinition,
+    input: Record<string, unknown>,
+    scope: ScopeDefinition,
+    signal: AbortSignal,
+    approvalGranted = false,
+  ): Promise<ScannerResult> {
+    if (definition.shell !== false) throw new Error('trusted recon tools require shell: false');
+    if ((!definition.automaticExecutionAllowed || definition.requiresApproval) && !approvalGranted)
+      throw new Error(`trusted recon tool ${definition.name} requires operator approval`);
+    if (!definition.scopeValidator(input, scope))
+      throw new Error(`trusted recon tool ${definition.name} failed scope validation`);
+    const args = definition.argumentBuilder(input, scope);
+    if (
+      !Array.isArray(args) ||
+      args.length > 256 ||
+      args.some((value) => typeof value !== 'string' || /[\0\r\n]/.test(value))
+    )
+      throw new Error(`trusted recon tool ${definition.name} produced invalid arguments`);
+    return this.run(
+      definition.name,
+      args,
+      undefined,
+      {
+        ...scope.limits,
+        maxRuntimeSeconds: Math.min(scope.limits.maxRuntimeSeconds, definition.timeoutSeconds),
+        maxOutputBytes: Math.min(scope.limits.maxOutputBytes, definition.maximumOutputBytes),
+      },
+      signal,
+      definition.executable,
+    );
+  }
+
   async subfinder(
     domain: string,
     limits: ScannerLimits,
@@ -59,6 +97,28 @@ export class DockerScannerRunner {
     return this.run(
       'subfinder',
       ['-silent', '-duc', '-d', domain, '-timeout', '30', '-max-time', '5'],
+      undefined,
+      limits,
+      signal,
+    );
+  }
+
+  async crtsh(domain: string, limits: ScannerLimits, signal: AbortSignal): Promise<ScannerResult> {
+    const query = encodeURIComponent(`%.${domain}`);
+    return this.run(
+      'crtsh',
+      [
+        '--silent',
+        '--show-error',
+        '--fail-with-body',
+        '--proto',
+        '=https',
+        '--max-time',
+        String(Math.min(limits.maxRuntimeSeconds, 60)),
+        '--max-filesize',
+        String(limits.maxOutputBytes),
+        `https://crt.sh/?q=${query}&output=json`,
+      ],
       undefined,
       limits,
       signal,
@@ -325,6 +385,7 @@ export class DockerScannerRunner {
         };
     const safeNames = [
       'subfinder',
+      'crtsh',
       'dnsx',
       'httpx',
       'katana',
@@ -376,21 +437,23 @@ export class DockerScannerRunner {
   }
 
   private async run(
-    scanner: ScannerName,
+    scanner: ScannerName | string,
     scannerArgs: string[],
     input: string | undefined,
     limits: ScannerLimits,
     signal: AbortSignal,
+    executableOverride?: string,
   ): Promise<ScannerResult> {
     const raw = scanner === 'nmap_raw';
     if (raw && !this.rawEnabled) throw new Error('raw-socket scanner profile is disabled');
     const image = raw ? this.rawImage : this.image;
     const executable =
-      scanner === 'nmap_connect' || scanner === 'nmap_raw'
+      executableOverride ??
+      (scanner === 'nmap_connect' || scanner === 'nmap_raw'
         ? 'nmap'
-        : scanner === 'validate_http'
+        : scanner === 'validate_http' || scanner === 'crtsh'
           ? 'curl'
-          : scanner;
+          : scanner);
     const containerName = `agent-workbench-scan-${randomUUID()}`;
     const args = [
       'run',
@@ -446,12 +509,19 @@ export class DockerScannerRunner {
         exitCode: result.exitCode ?? 1,
         profile: raw ? 'raw' : 'safe',
         image,
+        termination: 'exit',
       };
     } catch (error) {
-      if (signal.aborted) throw error;
-      throw new Error(
-        `${scanner} container failed to start or exceeded its limits: ${safeMessage(error)}`,
-      );
+      const details = scannerFailure(error, signal);
+      return {
+        stdout: details.stdout,
+        stderr: details.stderr,
+        exitCode: details.exitCode,
+        profile: raw ? 'raw' : 'safe',
+        image,
+        termination: details.termination,
+        error: `${scanner} container ${details.message}`,
+      };
     } finally {
       await execa(this.dockerBinary, ['rm', '-f', containerName], {
         reject: false,
@@ -473,4 +543,37 @@ function dockerEnvironment(): Record<string, string> {
 
 function safeMessage(error: unknown): string {
   return clean(error instanceof Error ? error.message : String(error)).slice(0, 500);
+}
+
+function scannerFailure(
+  error: unknown,
+  signal: AbortSignal,
+): {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  termination: NonNullable<ScannerResult['termination']>;
+  message: string;
+} {
+  const record =
+    typeof error === 'object' && error !== null
+      ? (error as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
+  const message = safeMessage(error);
+  const stdout = clean(typeof record.stdout === 'string' ? record.stdout : '');
+  const stderr = clean(typeof record.stderr === 'string' ? record.stderr : message);
+  const exitCode =
+    typeof record.exitCode === 'number' && Number.isInteger(record.exitCode) ? record.exitCode : 1;
+  const timedOut = record.timedOut === true || /timed?\s*out|timeout/i.test(message);
+  const outputLimit = /maxbuffer|stdio_maxbuffer|maximum.*buffer|output.*limit/i.test(
+    `${String(record.code ?? '')} ${message}`,
+  );
+  const termination: NonNullable<ScannerResult['termination']> = signal.aborted
+    ? 'cancelled'
+    : timedOut
+      ? 'timed_out'
+      : outputLimit
+        ? 'output_limit'
+        : 'start_failed';
+  return { stdout, stderr, exitCode, termination, message };
 }

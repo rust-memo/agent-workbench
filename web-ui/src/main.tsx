@@ -10,13 +10,18 @@ import { createRoot } from 'react-dom/client';
 import { type OperatorPage, OperatorWorkspace } from './OperatorWorkspace';
 import {
   type ActionProposal,
+  type AIReview,
   type Artifact,
+  type ArtifactContent,
   type CoverageResponse,
   type Engagement,
   type Finding,
   type LegacySession,
+  type ReconAsset,
   type ReconInsight,
+  type ReconResultsResponse,
   type ReconRun,
+  type ReconToolRun,
   type RuntimeEvent,
   type Session,
   type SlashCommand,
@@ -33,9 +38,11 @@ const SIDEBAR_COLLAPSED_KEY = 'agent-workbench:sessions-sidebar-collapsed';
 const WORKSPACE_VIEW_KEY = 'agent-workbench:workspace-view';
 const OPERATOR_PAGE_KEY = 'agent-workbench:operator-page';
 type WorkspaceView = 'operator' | 'recon';
+type ReconPage = 'console' | 'results';
 type SidebarSection =
   | 'operator'
   | 'recon'
+  | 'recon-results'
   | 'sessions'
   | 'scope'
   | 'providers'
@@ -85,6 +92,16 @@ function App(): React.ReactElement {
   const [legacySessions, setLegacySessions] = useState<LegacySession[]>([]);
   const [skills, setSkills] = useState<WorkbenchSkill[]>([]);
   const [reconRuns, setReconRuns] = useState<ReconRun[]>([]);
+  const [reconResults, setReconResults] = useState<ReconResultsResponse>({
+    run: null,
+    toolRuns: [],
+    assets: [],
+    httpResults: [],
+    artifactLinks: [],
+    interests: {},
+  });
+  const [aiReviews, setAIReviews] = useState<AIReview[]>([]);
+  const [reconPage, setReconPage] = useState<ReconPage>('console');
   const [reconProfile, setReconProfile] = useState<ReconRun['profile']>('standard');
   const [providerDraft, setProviderDraft] = useState<Session['provider']>('qwen');
   const [modelDraft, setModelDraft] = useState('default');
@@ -133,18 +150,22 @@ function App(): React.ReactElement {
   }, [operatorPage]);
 
   const refreshSessionData = useCallback(async (sessionId: string) => {
-    const [files, actions, nextFindings, nextCoverage, runs] = await Promise.all([
+    const [files, actions, nextFindings, nextCoverage, runs, results, reviews] = await Promise.all([
       api<Artifact[]>(`/sessions/${sessionId}/artifacts`),
       api<ActionProposal[]>(`/sessions/${sessionId}/actions`),
       api<Finding[]>(`/sessions/${sessionId}/findings`),
       api<CoverageResponse>(`/sessions/${sessionId}/coverage`),
       api<ReconRun[]>(`/sessions/${sessionId}/recon-runs`),
+      api<ReconResultsResponse>(`/sessions/${sessionId}/recon-results`),
+      api<AIReview[]>(`/sessions/${sessionId}/recon-ai-reviews`),
     ]);
     setArtifacts(files);
     setProposals(actions);
     setFindings(nextFindings);
     setCoverage(nextCoverage);
     setReconRuns(runs);
+    setReconResults(results);
+    setAIReviews(reviews);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -237,6 +258,15 @@ function App(): React.ReactElement {
       setFindings([]);
       setCoverage({ summary: {}, rows: [] });
       setReconRuns([]);
+      setReconResults({
+        run: null,
+        toolRuns: [],
+        assets: [],
+        httpResults: [],
+        artifactLinks: [],
+        interests: {},
+      });
+      setAIReviews([]);
       return;
     }
     void Promise.all([
@@ -270,7 +300,8 @@ function App(): React.ReactElement {
     (provider) => provider.provider === (activeSession?.provider ?? providerDraft),
   );
   const draftCapability = status?.providers.find((provider) => provider.provider === providerDraft);
-  const reconInspectorVisible = workspaceView === 'recon' && reconInspectorOpen;
+  const reconInspectorVisible =
+    workspaceView === 'recon' && reconPage === 'console' && reconInspectorOpen;
 
   useEffect(() => {
     if (!activeSession) return;
@@ -647,6 +678,13 @@ function App(): React.ReactElement {
     if (section === 'recon') {
       setSidebarPanel(null);
       setWorkspaceView('recon');
+      setReconPage('console');
+      return;
+    }
+    if (section === 'recon-results') {
+      setSidebarPanel(null);
+      setWorkspaceView('recon');
+      setReconPage('results');
       return;
     }
     const panel = (
@@ -693,7 +731,7 @@ function App(): React.ReactElement {
           <span className="brand-mark">AW</span>
           <div>
             <strong>Agent Workbench</strong>
-            <small>Local AI Security Workbench · v0.5.0</small>
+            <small>Local AI Security Workbench · v0.6.0</small>
           </div>
         </div>
         <div className="topbar-actions-v3">
@@ -727,6 +765,15 @@ function App(): React.ReactElement {
             >
               <i>⌘</i>
               <span>Recon Board</span>
+            </button>
+            <button
+              type="button"
+              className={sidebarSection === 'recon-results' ? 'active' : ''}
+              onClick={() => navigateSidebar('recon-results')}
+            >
+              <i>▦</i>
+              <span>Recon Results</span>
+              <em>{reconResults.assets.length}</em>
             </button>
             <div className="nav-divider-v5" />
             <button
@@ -812,7 +859,7 @@ function App(): React.ReactElement {
               <b>▣</b>
               <span>
                 <strong>Local Mode</strong>
-                <small>v{status?.version ?? '0.5.0'}</small>
+                <small>v{status?.version ?? '0.6.0'}</small>
               </span>
             </div>
           </section>
@@ -1064,7 +1111,9 @@ function App(): React.ReactElement {
             </span>
             <h1>
               {workspaceView === 'recon'
-                ? 'Recon Board'
+                ? reconPage === 'results'
+                  ? 'Recon Results'
+                  : 'Recon Board'
                 : (activeSession?.title ?? 'No session selected')}
             </h1>
             {workspaceView === 'recon' && activeSession && (
@@ -1072,7 +1121,7 @@ function App(): React.ReactElement {
             )}
           </div>
           <div className="panel-actions">
-            {workspaceView === 'recon' && (
+            {workspaceView === 'recon' && reconPage === 'console' && (
               <button
                 type="button"
                 className={reconInspectorOpen ? 'review-toggle-v6 active' : 'review-toggle-v6'}
@@ -1094,7 +1143,7 @@ function App(): React.ReactElement {
                 {cancellingSession === selected ? 'Cancelling…' : 'Cancel operation'}
               </button>
             )}
-            {workspaceView === 'recon' && (
+            {workspaceView === 'recon' && reconPage === 'console' && (
               <details className="recon-more-v6">
                 <summary aria-label="More Recon Board options">•••</summary>
                 <div>
@@ -1171,101 +1220,115 @@ function App(): React.ReactElement {
           />
         ) : (
           <>
-            <ReconWorkspace
-              engagement={activeEngagement}
-              session={activeSession}
-              runs={reconRuns}
-              profile={reconProfile}
-              setProfile={setReconProfile}
-              skills={skills}
-              events={visibleEvents}
-              proposals={proposals}
-              artifactCount={artifacts.length}
-              findingCount={findings.length}
-              provider={providerDraft}
-              model={modelDraft || 'default'}
-              onStart={() => void startRecon()}
-              onCancel={() => void cancelTurn()}
-              onRefresh={() => selected && void refreshSessionData(selected)}
-              onApprove={(proposal) => void approveAction(proposal)}
-              onReject={(proposal) => void rejectAction(proposal)}
-              onToggleReview={() => setReconInspectorOpen((current) => !current)}
-              reviewOpen={reconInspectorOpen}
-              compact={terminalCompact}
-              cancelling={cancellingSession === selected}
-              onCreated={async (sessionId) => {
-                await refresh();
-                setSelected(sessionId);
-              }}
-              onLoadSkill={(name, target) => void loadSkill(name, target)}
-              onUpdateInsight={(insight, nextStatus) => void updateInsight(insight, nextStatus)}
-              onError={setError}
-              policyBusy={updatingScopePolicy}
-              onTogglePassive={() =>
-                void updateScopePolicy({
-                  allowThirdPartyPassiveSources:
-                    !activeEngagement?.scope.allowThirdPartyPassiveSources,
-                })
-              }
-              onToggleSubdomains={() =>
-                void updateScopePolicy({
-                  includeSubdomains: !activeEngagement?.scope.allowedHosts.some((host) =>
-                    host.startsWith('*.'),
-                  ),
-                })
-              }
-            />
+            {reconPage === 'results' ? (
+              <ReconResultsWorkspace
+                session={activeSession}
+                results={reconResults}
+                artifacts={artifacts}
+                reviews={aiReviews}
+                onRefresh={() => selected && void refreshSessionData(selected)}
+                onError={setError}
+                onChanged={() => selected && void refreshSessionData(selected)}
+              />
+            ) : (
+              <ReconWorkspace
+                engagement={activeEngagement}
+                session={activeSession}
+                runs={reconRuns}
+                profile={reconProfile}
+                setProfile={setReconProfile}
+                skills={skills}
+                events={visibleEvents}
+                proposals={proposals}
+                artifactCount={artifacts.length}
+                findingCount={findings.length}
+                provider={providerDraft}
+                model={modelDraft || 'default'}
+                onStart={() => void startRecon()}
+                onCancel={() => void cancelTurn()}
+                onRefresh={() => selected && void refreshSessionData(selected)}
+                onApprove={(proposal) => void approveAction(proposal)}
+                onReject={(proposal) => void rejectAction(proposal)}
+                onToggleReview={() => setReconInspectorOpen((current) => !current)}
+                reviewOpen={reconInspectorOpen}
+                compact={terminalCompact}
+                cancelling={cancellingSession === selected}
+                onCreated={async (sessionId) => {
+                  await refresh();
+                  setSelected(sessionId);
+                }}
+                onLoadSkill={(name, target) => void loadSkill(name, target)}
+                onUpdateInsight={(insight, nextStatus) => void updateInsight(insight, nextStatus)}
+                onError={setError}
+                policyBusy={updatingScopePolicy}
+                onTogglePassive={() =>
+                  void updateScopePolicy({
+                    allowThirdPartyPassiveSources:
+                      !activeEngagement?.scope.allowThirdPartyPassiveSources,
+                  })
+                }
+                onToggleSubdomains={() =>
+                  void updateScopePolicy({
+                    includeSubdomains: !activeEngagement?.scope.allowedHosts.some((host) =>
+                      host.startsWith('*.'),
+                    ),
+                  })
+                }
+              />
+            )}
           </>
         )}
-        <div className="composer-wrap">
-          {commandSuggestions.length > 0 && (
-            <div className="command-menu">
-              {commandSuggestions.map((command) => (
-                <button
-                  key={command.name}
-                  type="button"
-                  onClick={() => setMessage(`${command.name}${command.args ? ' ' : ''}`)}
-                >
-                  <code>
-                    {command.name}
-                    {command.args ? ` ${command.args}` : ''}
-                  </code>
-                  <span>{command.description}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          <form className="composer" onSubmit={(event) => void submitTurn(event)}>
-            <span className="prompt">›</span>
-            <textarea
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-              disabled={!selected || activeSession?.state === 'running'}
-              placeholder={
-                activeEngagement?.mode === 'PLAN'
-                  ? 'Ask anything or type / for commands…'
-                  : 'Describe authorized recon or type / for commands…'
-              }
-              onKeyDown={(event) => {
-                if (event.key === 'Tab' && commandSuggestions[0]) {
-                  event.preventDefault();
-                  setMessage(
-                    `${commandSuggestions[0].name}${commandSuggestions[0].args ? ' ' : ''}`,
-                  );
-                } else if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
+        {!(workspaceView === 'recon' && reconPage === 'results') && (
+          <div className="composer-wrap">
+            {commandSuggestions.length > 0 && (
+              <div className="command-menu">
+                {commandSuggestions.map((command) => (
+                  <button
+                    key={command.name}
+                    type="button"
+                    onClick={() => setMessage(`${command.name}${command.args ? ' ' : ''}`)}
+                  >
+                    <code>
+                      {command.name}
+                      {command.args ? ` ${command.args}` : ''}
+                    </code>
+                    <span>{command.description}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <form className="composer" onSubmit={(event) => void submitTurn(event)}>
+              <span className="prompt">›</span>
+              <textarea
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                disabled={!selected || activeSession?.state === 'running'}
+                placeholder={
+                  activeEngagement?.mode === 'PLAN'
+                    ? 'Ask anything or type / for commands…'
+                    : 'Describe authorized recon or type / for commands…'
                 }
-              }}
-            />
-            <button
-              type="submit"
-              disabled={!selected || !message.trim() || activeSession?.state === 'running'}
-            >
-              Run
-            </button>
-          </form>
-        </div>
+                onKeyDown={(event) => {
+                  if (event.key === 'Tab' && commandSuggestions[0]) {
+                    event.preventDefault();
+                    setMessage(
+                      `${commandSuggestions[0].name}${commandSuggestions[0].args ? ' ' : ''}`,
+                    );
+                  } else if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                disabled={!selected || !message.trim() || activeSession?.state === 'running'}
+              >
+                Run
+              </button>
+            </form>
+          </div>
+        )}
       </main>
 
       {reconInspectorVisible && (
@@ -1416,6 +1479,958 @@ function App(): React.ReactElement {
   );
 }
 
+type ReconResultsTab = 'assets' | 'tools' | 'combined' | 'httpx' | 'files' | 'ai';
+
+function ReconResultsWorkspace({
+  session,
+  results,
+  artifacts,
+  reviews,
+  onRefresh,
+  onError,
+  onChanged,
+}: {
+  session?: Session;
+  results: ReconResultsResponse;
+  artifacts: Artifact[];
+  reviews: AIReview[];
+  onRefresh: () => void;
+  onError: (message: string) => void;
+  onChanged: () => void;
+}): React.ReactElement {
+  const [tab, setTab] = useState<ReconResultsTab>('assets');
+  const [query, setQuery] = useState('');
+  const [source, setSource] = useState('all');
+  const [scopeFilter, setScopeFilter] = useState('all');
+  const [liveFilter, setLiveFilter] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [errorFilter, setErrorFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [technologyFilter, setTechnologyFilter] = useState('');
+  const [selectedAssets, setSelectedAssets] = useState<Set<string>>(new Set());
+  const [selectedArtifacts, setSelectedArtifacts] = useState<Set<string>>(new Set());
+  const [selectedExcerpt, setSelectedExcerpt] = useState<{
+    artifactId: string;
+    startLine: number;
+    endLine: number;
+  }>();
+  const [viewerArtifact, setViewerArtifact] = useState<Artifact>();
+  const [expandedTool, setExpandedTool] = useState<ReconToolRun>();
+  const [expandedAsset, setExpandedAsset] = useState<ReconAsset>();
+  const [objective, setObjective] = useState('interesting-assets');
+  const [pendingReview, setPendingReview] = useState<AIReview>();
+  const runArtifacts = useMemo(() => {
+    const linked = new Set(results.artifactLinks.map((link) => link.artifactId));
+    return artifacts.filter(
+      (artifact) =>
+        linked.has(artifact.id) || (results.run && artifact.metadata?.runId === results.run.id),
+    );
+  }, [artifacts, results.artifactLinks, results.run]);
+  const sources = useMemo(
+    () => [...new Set(results.assets.flatMap((asset) => asset.sources.map((item) => item.tool)))],
+    [results.assets],
+  );
+  const filteredAssets = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const technology = technologyFilter.trim().toLowerCase();
+    const status = statusFilter ? Number(statusFilter) : undefined;
+    return results.assets.filter((asset) => {
+      if (
+        needle &&
+        !`${asset.normalizedValue} ${asset.http?.title ?? ''} ${(asset.http?.technologies ?? []).join(' ')}`
+          .toLowerCase()
+          .includes(needle)
+      )
+        return false;
+      if (source !== 'all' && !asset.sources.some((item) => item.tool === source)) return false;
+      if (scopeFilter === 'in' && !asset.inScope) return false;
+      if (scopeFilter === 'out' && asset.inScope) return false;
+      if (liveFilter === 'live' && !asset.http?.live) return false;
+      if (liveFilter === 'not-live' && asset.http?.live) return false;
+      if (typeFilter !== 'all' && asset.type !== typeFilter) return false;
+      const hasErrors = asset.sources.some((item) =>
+        results.toolRuns.some(
+          (toolRun) =>
+            toolRun.id === item.toolRunId &&
+            ['failed', 'cancelled', 'timed_out'].includes(toolRun.status),
+        ),
+      );
+      if (errorFilter === 'errors' && !hasErrors) return false;
+      if (errorFilter === 'clean' && hasErrors) return false;
+      if (status !== undefined && asset.http?.statusCode !== status) return false;
+      if (
+        technology &&
+        !(asset.http?.technologies ?? []).some((item) => item.toLowerCase().includes(technology))
+      )
+        return false;
+      return true;
+    });
+  }, [
+    results.assets,
+    query,
+    source,
+    scopeFilter,
+    liveFilter,
+    typeFilter,
+    errorFilter,
+    statusFilter,
+    technologyFilter,
+  ]);
+
+  const toggleAsset = (id: string): void =>
+    setSelectedAssets((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleArtifact = (id: string): void =>
+    setSelectedArtifacts((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const sendToAI = async (): Promise<void> => {
+    if (!session || !results.run) return;
+    try {
+      const review = await api<AIReview>(`/sessions/${session.id}/recon-ai-reviews`, {
+        method: 'POST',
+        body: JSON.stringify({
+          runId: results.run.id,
+          objective,
+          assetIds: [...selectedAssets],
+          artifactIds: [...selectedArtifacts],
+          excerpt: selectedExcerpt,
+        }),
+      });
+      setPendingReview(review);
+      setTab('ai');
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+  const approveReview = async (): Promise<void> => {
+    if (!session || !pendingReview) return;
+    try {
+      await api(`/sessions/${session.id}/recon-ai-reviews/${pendingReview.id}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ inputHashes: pendingReview.inputHashes }),
+      });
+      setPendingReview(undefined);
+      onChanged();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+  const markInteresting = async (asset: ReconAsset): Promise<void> => {
+    if (!session) return;
+    const reason = window
+      .prompt('Why is this asset interesting?', 'Manual review priority')
+      ?.trim();
+    if (!reason) return;
+    try {
+      await api(`/sessions/${session.id}/recon-assets/${asset.id}/interest`, {
+        method: 'POST',
+        body: JSON.stringify({ score: 70, reasons: [reason], reviewStatus: 'new' }),
+      });
+      onChanged();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+  const addAssetNote = async (asset: ReconAsset): Promise<void> => {
+    if (!session) return;
+    const note = window.prompt('Add a note for this asset')?.trim();
+    if (!note) return;
+    try {
+      await api(`/sessions/${session.id}/recon-assets/${asset.id}/interest`, {
+        method: 'POST',
+        body: JSON.stringify({ score: 0, reasons: [`Note: ${note}`], reviewStatus: 'reviewing' }),
+      });
+      onChanged();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+  const downloadSelected = (): void => {
+    const rows = results.assets
+      .filter((asset) => selectedAssets.has(asset.id))
+      .map((asset) => asset.normalizedValue);
+    if (!rows.length) return;
+    const href = URL.createObjectURL(new Blob([`${rows.join('\n')}\n`], { type: 'text/plain' }));
+    const anchor = document.createElement('a');
+    anchor.href = href;
+    anchor.download = 'selected-recon-assets.txt';
+    anchor.click();
+    URL.revokeObjectURL(href);
+  };
+  const createScanProposal = async (): Promise<void> => {
+    if (!session || !selectedAssets.size) return;
+    const action = window.prompt('Proposal type: katana or nuclei', 'katana')?.trim().toLowerCase();
+    if (action !== 'katana' && action !== 'nuclei') return;
+    try {
+      await api(`/sessions/${session.id}/recon-scan-proposals`, {
+        method: 'POST',
+        body: JSON.stringify({
+          assetIds: [...selectedAssets],
+          action,
+          reason: `Operator-selected ${action} follow-up for ${selectedAssets.size} recon asset(s).`,
+        }),
+      });
+      onChanged();
+    } catch (cause) {
+      onError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+  if (!session)
+    return <div className="recon-results-empty-v8">Select a Recon session to inspect results.</div>;
+  return (
+    <section className="recon-results-v8">
+      <header className="recon-results-head-v8">
+        <div>
+          <span>STRUCTURED RECON WORKSPACE</span>
+          <strong>{results.run ? `Run ${results.run.id.slice(0, 8)}` : 'No recon run yet'}</strong>
+          <small>
+            {results.assets.length} assets · {results.toolRuns.length} tool runs ·{' '}
+            {results.httpResults.length} HTTP observations
+          </small>
+        </div>
+        <button type="button" onClick={onRefresh}>
+          ↻ Refresh
+        </button>
+      </header>
+      <nav className="recon-results-tabs-v8" aria-label="Recon result sections">
+        {(
+          [
+            ['assets', 'Assets', results.assets.length],
+            ['tools', 'Tool Runs', results.toolRuns.length],
+            ['combined', 'Combined', results.run ? 1 : 0],
+            ['httpx', 'HTTPX', results.httpResults.length],
+            ['files', 'Files', runArtifacts.length],
+            ['ai', 'AI Review', reviews.length],
+          ] as Array<[ReconResultsTab, string, number]>
+        ).map(([key, label, count]) => (
+          <button
+            type="button"
+            key={key}
+            className={tab === key ? 'active' : ''}
+            onClick={() => setTab(key)}
+          >
+            {label} <b>{count}</b>
+          </button>
+        ))}
+      </nav>
+
+      {tab === 'assets' && (
+        <div className="recon-results-pane-v8">
+          <div className="recon-filterbar-v8">
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search domain, title, or technology…"
+            />
+            <select value={source} onChange={(event) => setSource(event.target.value)}>
+              <option value="all">All sources</option>
+              {sources.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+            <select value={scopeFilter} onChange={(event) => setScopeFilter(event.target.value)}>
+              <option value="all">Any scope</option>
+              <option value="in">In scope</option>
+              <option value="out">Out of scope</option>
+            </select>
+            <select value={liveFilter} onChange={(event) => setLiveFilter(event.target.value)}>
+              <option value="all">Any HTTP state</option>
+              <option value="live">Live</option>
+              <option value="not-live">Not live</option>
+            </select>
+            <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+              <option value="all">All types</option>
+              <option value="domain">Domain</option>
+              <option value="subdomain">Subdomain</option>
+              <option value="url">URL</option>
+              <option value="ip">IP</option>
+            </select>
+            <select value={errorFilter} onChange={(event) => setErrorFilter(event.target.value)}>
+              <option value="all">Any tool health</option>
+              <option value="errors">Has errors</option>
+              <option value="clean">No source errors</option>
+            </select>
+            <input
+              className="short"
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value.replace(/\D/g, ''))}
+              placeholder="Status"
+            />
+            <input
+              className="short"
+              value={technologyFilter}
+              onChange={(event) => setTechnologyFilter(event.target.value)}
+              placeholder="Technology"
+            />
+          </div>
+          <div className="recon-selectionbar-v8">
+            <span>
+              {selectedAssets.size} selected · {filteredAssets.length} shown
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelectedAssets(new Set(filteredAssets.map((asset) => asset.id)))}
+            >
+              Select filtered
+            </button>
+            <button type="button" onClick={downloadSelected} disabled={!selectedAssets.size}>
+              Download selected
+            </button>
+            <button
+              type="button"
+              onClick={() => void createScanProposal()}
+              disabled={!selectedAssets.size}
+            >
+              Create scan proposal
+            </button>
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                setTab('ai');
+              }}
+              disabled={!selectedAssets.size}
+            >
+              Send to AI
+            </button>
+          </div>
+          <div className="recon-table-wrap-v8">
+            <table className="recon-table-v8">
+              <thead>
+                <tr>
+                  <th aria-label="Select" />
+                  <th>Domain or URL</th>
+                  <th>Type</th>
+                  <th>Sources</th>
+                  <th>Scope</th>
+                  <th>DNS</th>
+                  <th>HTTP</th>
+                  <th>Title / Technologies</th>
+                  <th>Seen</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {filteredAssets.map((asset) => (
+                  <tr key={asset.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedAssets.has(asset.id)}
+                        onChange={() => toggleAsset(asset.id)}
+                        aria-label={`Select ${asset.normalizedValue}`}
+                      />
+                    </td>
+                    <td>
+                      <strong>{asset.normalizedValue}</strong>
+                      {results.interests[asset.id]?.length ? (
+                        <small className="interesting">★ Interesting</small>
+                      ) : null}
+                    </td>
+                    <td>{asset.type}</td>
+                    <td>
+                      <div className="source-badges-v8">
+                        {[...new Set(asset.sources.map((item) => item.tool))].map((tool) => (
+                          <span key={tool}>{tool}</span>
+                        ))}
+                      </div>
+                    </td>
+                    <td>
+                      <span className={asset.inScope ? 'scope-in' : 'scope-out'}>
+                        {asset.inScope ? 'In scope' : 'Out of scope'}
+                      </span>
+                    </td>
+                    <td>{asset.dns ? (asset.dns.resolved ? 'Resolved' : 'No answer') : '—'}</td>
+                    <td>
+                      {asset.http?.probed
+                        ? `${asset.http.live ? 'Live' : 'No response'}${asset.http.statusCode ? ` · ${asset.http.statusCode}` : ''}`
+                        : '—'}
+                    </td>
+                    <td>
+                      <strong>{asset.http?.title ?? '—'}</strong>
+                      <small>{(asset.http?.technologies ?? []).join(', ')}</small>
+                    </td>
+                    <td>
+                      <small>{new Date(asset.firstSeenAt).toLocaleString()}</small>
+                    </td>
+                    <td>
+                      <div className="row-actions-v8">
+                        <button
+                          type="button"
+                          title="Copy"
+                          onClick={() => void navigator.clipboard.writeText(asset.normalizedValue)}
+                        >
+                          Copy
+                        </button>
+                        <button type="button" onClick={() => setExpandedAsset(asset)}>
+                          Details
+                        </button>
+                        <button type="button" onClick={() => void markInteresting(asset)}>
+                          ★
+                        </button>
+                        <button type="button" onClick={() => void addAssetNote(asset)}>
+                          Note
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === 'tools' && (
+        <div className="recon-tool-grid-v8">
+          {results.toolRuns.map((toolRun) => (
+            <article key={toolRun.id} className={`recon-tool-card-v8 ${toolRun.status}`}>
+              <header>
+                <div>
+                  <strong>{toolRun.tool}</strong>
+                  <small>{toolRun.actionName.replace(/_/g, ' ')}</small>
+                </div>
+                <span>{toolRunLabel(toolRun)}</span>
+              </header>
+              <div>
+                <b>{toolRun.rawResults}</b> raw
+                <b>{toolRun.validResults}</b> valid
+                <b>{toolRun.uniqueResults}</b> unique
+              </div>
+              {toolRun.error && <p>{toolRun.error}</p>}
+              <button type="button" onClick={() => setExpandedTool(toolRun)}>
+                Open run details
+              </button>
+            </article>
+          ))}
+          {!results.toolRuns.length && (
+            <div className="recon-results-empty-v8">No tool runs yet.</div>
+          )}
+        </div>
+      )}
+
+      {tab === 'combined' && (
+        <div className="recon-combined-v8">
+          <div className="recon-summary-cards-v8">
+            {[
+              ['Unique domains', results.run?.summary.uniqueDomains ?? results.assets.length],
+              ['Duplicates removed', results.run?.summary.duplicatesRemoved ?? 0],
+              [
+                'In scope',
+                results.run?.summary.inScopeDomains ??
+                  results.assets.filter((asset) => asset.inScope).length,
+              ],
+              [
+                'Out of scope',
+                results.run?.summary.outOfScopeDomains ??
+                  results.assets.filter((asset) => !asset.inScope).length,
+              ],
+            ].map(([label, value]) => (
+              <article key={label}>
+                <strong>{String(value)}</strong>
+                <span>{label}</span>
+              </article>
+            ))}
+          </div>
+          <ArtifactRows
+            artifacts={runArtifacts.filter((artifact) =>
+              ['all-domains.txt', 'all-domains-with-sources.json', 'duplicates.json'].includes(
+                artifact.filename,
+              ),
+            )}
+            selected={selectedArtifacts}
+            onToggle={toggleArtifact}
+            onOpen={setViewerArtifact}
+            onSend={(artifact) => {
+              setSelectedArtifacts(new Set([artifact.id]));
+              setSelectedExcerpt(undefined);
+              setTab('ai');
+            }}
+          />
+        </div>
+      )}
+
+      {tab === 'httpx' && (
+        <div className="recon-results-pane-v8">
+          <div className="recon-table-wrap-v8">
+            <table className="recon-table-v8">
+              <thead>
+                <tr>
+                  <th>URL</th>
+                  <th>Status</th>
+                  <th>Title</th>
+                  <th>Technology</th>
+                  <th>Server</th>
+                  <th>IP</th>
+                  <th>Source domain</th>
+                  <th>Discovery tools</th>
+                </tr>
+              </thead>
+              <tbody>
+                {results.httpResults.map((row) => {
+                  const asset = results.assets.find((item) => item.id === row.assetId);
+                  return (
+                    <tr key={row.id}>
+                      <td>
+                        <a href={row.url} target="_blank" rel="noreferrer">
+                          {row.url}
+                        </a>
+                      </td>
+                      <td>{row.statusCode ?? '—'}</td>
+                      <td>{row.title ?? '—'}</td>
+                      <td>{row.technologies.join(', ') || '—'}</td>
+                      <td>{row.webServer ?? '—'}</td>
+                      <td>{row.ip ?? '—'}</td>
+                      <td>{row.input}</td>
+                      <td>
+                        <div className="source-badges-v8">
+                          {[...new Set(asset?.sources.map((item) => item.tool) ?? [])].map(
+                            (tool) => (
+                              <span key={tool}>{tool}</span>
+                            ),
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === 'files' && (
+        <ArtifactRows
+          artifacts={runArtifacts}
+          selected={selectedArtifacts}
+          onToggle={toggleArtifact}
+          onOpen={setViewerArtifact}
+          onSend={(artifact) => {
+            setSelectedArtifacts(new Set([artifact.id]));
+            setSelectedExcerpt(undefined);
+            setTab('ai');
+          }}
+        />
+      )}
+
+      {tab === 'ai' && (
+        <div className="recon-ai-v8">
+          <section className="recon-ai-compose-v8">
+            <header>
+              <strong>AI Review</strong>
+              <span>Only the approved redacted payload is dispatched.</span>
+            </header>
+            <label>
+              Review objective
+              <select value={objective} onChange={(event) => setObjective(event.target.value)}>
+                <option value="interesting-assets">Analyze Interesting Assets</option>
+                <option value="attack-surface">Prioritize Attack Surface</option>
+                <option value="unusual-hosts">Identify Unusual Hosts</option>
+                <option value="technologies">Review Technologies</option>
+                <option value="next-tests">Suggest Next Tests</option>
+                <option value="admin-api-endpoints">Find Admin or API Endpoints</option>
+                <option value="general">General Review</option>
+              </select>
+            </label>
+            <div>
+              <span>{selectedAssets.size} assets selected</span>
+              <span>{selectedArtifacts.size} artifacts selected</span>
+              {selectedExcerpt && (
+                <span>
+                  Lines {selectedExcerpt.startLine}–{selectedExcerpt.endLine} selected
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="primary"
+              disabled={!selectedAssets.size && !selectedArtifacts.size && !selectedExcerpt}
+              onClick={() => void sendToAI()}
+            >
+              Generate redacted preview
+            </button>
+          </section>
+          {pendingReview && (
+            <section className="recon-ai-preview-v8">
+              <header>
+                <div>
+                  <strong>Approval preview</strong>
+                  <small>
+                    {pendingReview.provider} / {pendingReview.model} ·{' '}
+                    {formatBytes(pendingReview.payloadBytes)}
+                  </small>
+                </div>
+                <button type="button" onClick={() => setPendingReview(undefined)}>
+                  ×
+                </button>
+              </header>
+              <pre>{pendingReview.redactedPreview}</pre>
+              <div>
+                <span>{pendingReview.inputHashes.length} auditable input hashes</span>
+                <button type="button" className="primary" onClick={() => void approveReview()}>
+                  Approve and send once
+                </button>
+              </div>
+            </section>
+          )}
+          <section className="recon-ai-history-v8">
+            <h3>Review history</h3>
+            {reviews.map((review) => (
+              <article key={review.id}>
+                <span className={review.status}>{review.status.replace('_', ' ')}</span>
+                <strong>{review.objective.replace(/-/g, ' ')}</strong>
+                <small>
+                  {review.provider} · {formatBytes(review.payloadBytes)} ·{' '}
+                  {new Date(review.createdAt).toLocaleString()}
+                </small>
+                {review.responseArtifactId && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setViewerArtifact(
+                        artifacts.find((artifact) => artifact.id === review.responseArtifactId),
+                      )
+                    }
+                  >
+                    Open response
+                  </button>
+                )}
+                {review.error && <p>{review.error}</p>}
+              </article>
+            ))}
+          </section>
+        </div>
+      )}
+
+      {expandedTool && (
+        <div className="artifact-viewer-backdrop-v8" onMouseDown={() => setExpandedTool(undefined)}>
+          <section
+            className="tool-run-details-v8"
+            role="dialog"
+            aria-modal="true"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <strong>{expandedTool.tool}</strong>
+                <small>{toolRunLabel(expandedTool)}</small>
+              </div>
+              <button type="button" onClick={() => setExpandedTool(undefined)}>
+                ×
+              </button>
+            </header>
+            <dl>
+              <dt>Action</dt>
+              <dd>{expandedTool.actionName}</dd>
+              <dt>Exit code</dt>
+              <dd>{expandedTool.exitCode ?? '—'}</dd>
+              <dt>Started</dt>
+              <dd>{expandedTool.startedAt ?? '—'}</dd>
+              <dt>Ended</dt>
+              <dd>{expandedTool.endedAt ?? '—'}</dd>
+            </dl>
+            {expandedTool.error && <pre>{expandedTool.error}</pre>}
+            {expandedTool.partialStderr && <pre>{expandedTool.partialStderr}</pre>}
+            <ArtifactRows
+              artifacts={runArtifacts.filter((artifact) =>
+                expandedTool.artifactIds.includes(artifact.id),
+              )}
+              selected={selectedArtifacts}
+              onToggle={toggleArtifact}
+              onOpen={setViewerArtifact}
+              onSend={(artifact) => {
+                setSelectedArtifacts(new Set([artifact.id]));
+                setSelectedExcerpt(undefined);
+                setExpandedTool(undefined);
+                setTab('ai');
+              }}
+            />
+          </section>
+        </div>
+      )}
+      {expandedAsset && (
+        <div
+          className="artifact-viewer-backdrop-v8"
+          onMouseDown={() => setExpandedAsset(undefined)}
+        >
+          <section
+            className="tool-run-details-v8"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Details for ${expandedAsset.normalizedValue}`}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <strong>{expandedAsset.normalizedValue}</strong>
+                <small>
+                  {expandedAsset.type} · {expandedAsset.inScope ? 'In scope' : 'Out of scope'}
+                </small>
+              </div>
+              <button type="button" onClick={() => setExpandedAsset(undefined)}>
+                ×
+              </button>
+            </header>
+            <dl>
+              <dt>First seen</dt>
+              <dd>{expandedAsset.firstSeenAt}</dd>
+              <dt>Last seen</dt>
+              <dd>{expandedAsset.lastSeenAt}</dd>
+              <dt>DNS</dt>
+              <dd>
+                {expandedAsset.dns
+                  ? `${expandedAsset.dns.resolved ? 'Resolved' : 'No answer'} · ${expandedAsset.dns.addresses.join(', ')}`
+                  : 'Not probed'}
+              </dd>
+              <dt>HTTP</dt>
+              <dd>
+                {expandedAsset.http
+                  ? `${expandedAsset.http.statusCode ?? '—'} · ${expandedAsset.http.title ?? 'Untitled'}`
+                  : 'Not probed'}
+              </dd>
+            </dl>
+            <h3>Discovery sources</h3>
+            {expandedAsset.sources.map((item) => (
+              <article key={item.id}>
+                <strong>{item.tool}</strong>
+                <code>{item.rawValue}</code>
+                <small>
+                  {item.toolRunId} · {new Date(item.discoveredAt).toLocaleString()}
+                </small>
+              </article>
+            ))}
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                setSelectedAssets(new Set([expandedAsset.id]));
+                setExpandedAsset(undefined);
+                setTab('ai');
+              }}
+            >
+              Send asset to AI
+            </button>
+          </section>
+        </div>
+      )}
+      {viewerArtifact && (
+        <ArtifactViewer
+          artifact={viewerArtifact}
+          onClose={() => setViewerArtifact(undefined)}
+          onError={onError}
+          onSend={(artifact, excerpt) => {
+            if (excerpt) {
+              setSelectedArtifacts(new Set());
+              setSelectedExcerpt({ artifactId: artifact.id, ...excerpt });
+            } else {
+              setSelectedArtifacts(new Set([artifact.id]));
+              setSelectedExcerpt(undefined);
+            }
+            setViewerArtifact(undefined);
+            setTab('ai');
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+function ArtifactRows({
+  artifacts,
+  selected,
+  onToggle,
+  onOpen,
+  onSend,
+}: {
+  artifacts: Artifact[];
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+  onOpen: (artifact: Artifact) => void;
+  onSend: (artifact: Artifact) => void;
+}): React.ReactElement {
+  return (
+    <div className="recon-files-v8">
+      {artifacts.map((artifact) => (
+        <article key={artifact.id}>
+          <input
+            type="checkbox"
+            checked={selected.has(artifact.id)}
+            onChange={() => onToggle(artifact.id)}
+            aria-label={`Select ${artifact.filename}`}
+          />
+          <div>
+            <strong>{artifact.filename}</strong>
+            <small>
+              {artifact.kind} · {formatBytes(artifact.size)} · {artifact.sha256.slice(0, 16)}…
+            </small>
+          </div>
+          <span>{String(artifact.metadata?.tool ?? 'recon')}</span>
+          <time>{new Date(artifact.createdAt).toLocaleString()}</time>
+          <button type="button" onClick={() => onOpen(artifact)}>
+            Open
+          </button>
+          <a href={`/api/v1/artifacts/${artifact.id}/raw`}>Download</a>
+          <button type="button" onClick={() => onSend(artifact)}>
+            Send to AI
+          </button>
+        </article>
+      ))}
+      {!artifacts.length && <div className="recon-results-empty-v8">No recon files yet.</div>}
+    </div>
+  );
+}
+
+function ArtifactViewer({
+  artifact,
+  onClose,
+  onError,
+  onSend,
+}: {
+  artifact: Artifact;
+  onClose: () => void;
+  onError: (message: string) => void;
+  onSend: (artifact: Artifact, excerpt?: { startLine: number; endLine: number }) => void;
+}): React.ReactElement {
+  const [content, setContent] = useState<ArtifactContent>();
+  const [view, setView] = useState<'redacted' | 'raw'>('redacted');
+  const [query, setQuery] = useState('');
+  const [startLine, setStartLine] = useState(1);
+  const [selectedLines, setSelectedLines] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    void api<ArtifactContent>(
+      `/artifacts/${artifact.id}/content?view=${view}&line=${startLine}&limit=200&q=${encodeURIComponent(query)}`,
+    )
+      .then(setContent)
+      .catch((cause) => onError(cause instanceof Error ? cause.message : String(cause)));
+  }, [artifact.id, view, query, startLine, onError]);
+  return (
+    <div className="artifact-viewer-backdrop-v8" onMouseDown={onClose}>
+      <section
+        className="artifact-viewer-v8"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Artifact viewer for ${artifact.filename}`}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header>
+          <div>
+            <strong>{artifact.filename}</strong>
+            <small>
+              {formatBytes(artifact.size)} · SHA-256 {artifact.sha256}
+            </small>
+          </div>
+          <button type="button" onClick={onClose}>
+            ×
+          </button>
+        </header>
+        <div className="artifact-viewer-tools-v8">
+          <input
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setStartLine(1);
+            }}
+            placeholder="Search inside file…"
+          />
+          <select value={view} onChange={(event) => setView(event.target.value as typeof view)}>
+            <option value="redacted">Redacted view</option>
+            <option value="raw">Raw view</option>
+          </select>
+          <button
+            type="button"
+            disabled={!selectedLines.size}
+            onClick={() => {
+              const text = content?.lines
+                .filter((line) => selectedLines.has(line.number))
+                .map((line) => line.text)
+                .join('\n');
+              if (text) void navigator.clipboard.writeText(text);
+            }}
+          >
+            Copy selected lines
+          </button>
+          <a href={`/api/v1/artifacts/${artifact.id}/raw`}>Download</a>
+          <button
+            type="button"
+            onClick={() => {
+              const lines = [...selectedLines].sort((a, b) => a - b);
+              onSend(
+                artifact,
+                lines.length
+                  ? { startLine: lines[0] as number, endLine: lines.at(-1) as number }
+                  : undefined,
+              );
+            }}
+          >
+            {selectedLines.size ? 'Send selected lines to AI' : 'Send to AI'}
+          </button>
+        </div>
+        <div className="artifact-code-v8">
+          {content?.lines.map((line) => (
+            <label key={line.number}>
+              <input
+                type="checkbox"
+                checked={selectedLines.has(line.number)}
+                onChange={() =>
+                  setSelectedLines((current) => {
+                    const next = new Set(current);
+                    if (next.has(line.number)) next.delete(line.number);
+                    else next.add(line.number);
+                    return next;
+                  })
+                }
+              />
+              <b>{line.number}</b>
+              <code>{line.text || ' '}</code>
+            </label>
+          ))}
+        </div>
+        <footer>
+          <span>
+            Lines {content?.startLine ?? 0}–
+            {(content?.startLine ?? 1) + (content?.lines.length ?? 0) - 1} of{' '}
+            {content?.totalLines ?? 0}
+            {content?.matches.length ? ` · ${content.matches.length} matches` : ''}
+          </span>
+          <div>
+            <button
+              type="button"
+              disabled={startLine === 1}
+              onClick={() => setStartLine(Math.max(1, startLine - 200))}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              disabled={!content?.hasMore}
+              onClick={() => setStartLine(startLine + 200)}
+            >
+              Next
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function toolRunLabel(run: ReconToolRun): string {
+  if (run.status === 'completed') return `Completed · ${run.uniqueResults} unique`;
+  if (run.uniqueResults > 0) return `${run.status.replace('_', ' ')} · partial results saved`;
+  return run.status.replace('_', ' ');
+}
+
 function ReconWorkspace({
   engagement,
   session,
@@ -1479,7 +2494,10 @@ function ReconWorkspace({
   const running = session?.state === 'running' || latest?.status === 'running';
   const [autoScroll, setAutoScroll] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+  const advancedTriggerRef = useRef<HTMLButtonElement>(null);
+  const advancedCloseRef = useRef<HTMLButtonElement>(null);
   const pending = proposals.filter((proposal) => proposal.status === 'pending');
   const displayEvents = events.slice(compact ? -30 : -120);
   const activityCount = displayEvents.length + pending.length;
@@ -1489,6 +2507,22 @@ function ReconWorkspace({
     logRef.current.dataset.activityCount = String(activityCount);
     logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [activityCount, autoScroll]);
+
+  useEffect(() => {
+    if (!advancedOpen) return;
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setAdvancedOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    const focusFrame = window.requestAnimationFrame(() => advancedCloseRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener('keydown', closeOnEscape);
+      advancedTriggerRef.current?.focus();
+    };
+  }, [advancedOpen]);
 
   const now = new Date().toLocaleTimeString([], { hour12: false });
   return (
@@ -1568,30 +2602,73 @@ function ReconWorkspace({
         <button type="button" className="recon-console-refresh-v7" onClick={onRefresh}>
           ↻
         </button>
-        <details className="recon-console-advanced-v7">
-          <summary title="Scope, policies, and playbooks">•••</summary>
-          <div>
-            <ReconBoardControls
-              engagement={engagement}
-              session={session}
-              runs={runs}
-              profile={profile}
-              setProfile={setProfile}
-              skills={skills}
-              provider={provider}
-              model={model}
-              onStart={onStart}
-              onRefresh={onRefresh}
-              onCreated={onCreated}
-              onLoadSkill={onLoadSkill}
-              onUpdateInsight={onUpdateInsight}
-              onError={onError}
-              policyBusy={policyBusy}
-              onTogglePassive={onTogglePassive}
-              onToggleSubdomains={onToggleSubdomains}
-            />
-          </div>
-        </details>
+        <div className={`recon-console-advanced-v7 ${advancedOpen ? 'open' : ''}`}>
+          <button
+            ref={advancedTriggerRef}
+            type="button"
+            title="Scope, policies, and playbooks"
+            aria-label="Open scope, policies, and playbooks"
+            aria-haspopup="dialog"
+            aria-expanded={advancedOpen}
+            aria-controls="recon-advanced-panel"
+            onClick={() => setAdvancedOpen(true)}
+          >
+            •••
+          </button>
+          {advancedOpen && (
+            <div
+              className="recon-console-advanced-backdrop-v7"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) setAdvancedOpen(false);
+              }}
+            >
+              <section
+                id="recon-advanced-panel"
+                className="recon-console-advanced-panel-v7"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="recon-advanced-title"
+              >
+                <header>
+                  <div>
+                    <strong id="recon-advanced-title">Scope, policies, and playbooks</strong>
+                    <small>Advanced recon controls</small>
+                  </div>
+                  <button
+                    ref={advancedCloseRef}
+                    type="button"
+                    aria-label="Close scope, policies, and playbooks"
+                    title="Close"
+                    onClick={() => setAdvancedOpen(false)}
+                  >
+                    ×
+                  </button>
+                </header>
+                <div className="recon-console-advanced-content-v7">
+                  <ReconBoardControls
+                    engagement={engagement}
+                    session={session}
+                    runs={runs}
+                    profile={profile}
+                    setProfile={setProfile}
+                    skills={skills}
+                    provider={provider}
+                    model={model}
+                    onStart={onStart}
+                    onRefresh={onRefresh}
+                    onCreated={onCreated}
+                    onLoadSkill={onLoadSkill}
+                    onUpdateInsight={onUpdateInsight}
+                    onError={onError}
+                    policyBusy={policyBusy}
+                    onTogglePassive={onTogglePassive}
+                    onToggleSubdomains={onToggleSubdomains}
+                  />
+                </div>
+              </section>
+            </div>
+          )}
+        </div>
       </div>
 
       {!session && (

@@ -162,4 +162,78 @@ describe.skipIf(!supportsNodeSqlite)('approved scanner actions', () => {
     );
     database.close();
   });
+
+  it('saves valid partial scanner output before marking an approved action failed', async () => {
+    const { WebDatabase } = await import('../storage/database.js');
+    const root = mkdtempSync(join(tmpdir(), 'agent-workbench-actions-partial-'));
+    roots.push(root);
+    const database = new WebDatabase(join(root, 'db.sqlite3'));
+    const engagement = database.createEngagement(
+      'partial action target',
+      createScope({ allowedHosts: ['example.com'], allowDirectLowImpactRecon: true }),
+      'RECON',
+    );
+    const session = database.createSession(engagement.id, 'partial scan', 'ollama', 'model');
+    const reconRun = database.createReconRun(session.id, engagement.id, 'quick', [
+      { key: 'http', label: 'HTTP' },
+    ]);
+    const events = new EventHub(database);
+    const artifacts = new ArtifactStore(join(root, 'artifacts'), database);
+    const input = await artifacts.save({
+      engagementId: engagement.id,
+      sessionId: session.id,
+      kind: 'http-observations',
+      filename: 'httpx.json',
+      body: JSON.stringify([{ url: 'https://example.com/' }]),
+      metadata: { runId: reconRun.id },
+    });
+    const runner = {
+      katana: async () => ({
+        stdout: `${JSON.stringify({ request: { endpoint: 'https://example.com/api' } })}\n`,
+        stderr: 'crawler timed out after partial output',
+        exitCode: 2,
+        profile: 'safe' as const,
+        image: 'test-safe',
+        termination: 'timed_out' as const,
+      }),
+    } as unknown as DockerScannerRunner;
+    const actions = new ActionService(database, artifacts, events, runner);
+    const proposal = actions.propose({
+      engagementId: engagement.id,
+      sessionId: session.id,
+      action: 'katana',
+      arguments: { inputArtifactId: input.id, depth: 1 },
+      reason: 'bounded partial crawler test',
+      scopeVersion: engagement.scope.version,
+      mode: engagement.mode,
+    });
+    const claimed = actions.claim(proposal.id, proposal.approvalHash, 'browser-session');
+
+    await expect(actions.executeClaimed(claimed, new AbortController().signal)).rejects.toThrow(
+      'katana exited 2',
+    );
+    const failed = database.getActionProposal(proposal.id);
+    expect(failed).toMatchObject({ status: 'failed' });
+    expect(failed?.resultArtifactId).toBeTruthy();
+    expect(database.getArtifact(failed?.resultArtifactId ?? '')?.metadata).toMatchObject({
+      partial: true,
+      exitCode: 2,
+    });
+    expect(database.eventsAfter(0, session.id).at(-1)?.payload).toMatchObject({
+      partialResultsSaved: true,
+      artifactId: failed?.resultArtifactId,
+    });
+    expect(database.listReconToolRuns(reconRun.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          tool: 'katana',
+          status: 'timed_out',
+          validResults: 1,
+          uniqueResults: 1,
+          artifactIds: [failed?.resultArtifactId],
+        }),
+      ]),
+    );
+    database.close();
+  });
 });

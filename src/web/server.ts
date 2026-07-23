@@ -10,6 +10,7 @@ import { ActionService, publicProposal } from './actions/service.js';
 import { WEB_SLASH_COMMANDS, commandUsesProvider } from './commands.js';
 import { EventHub } from './events.js';
 import { WebProviderManager } from './providers/manager.js';
+import { ReconAIReviewService } from './recon/aiReview.js';
 import { ReconService } from './recon/service.js';
 import { WebRuntimeManager } from './runtime.js';
 import { DockerScannerRunner } from './scanners/dockerRunner.js';
@@ -85,6 +86,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
   );
   const actions = new ActionService(database, artifacts, events, runner);
   const recon = new ReconService(database, artifacts, events, runner, actions);
+  const reconAI = new ReconAIReviewService(database, artifacts, events, providers);
   const legacySessions = new LegacySessionImporter(database, options.legacySessionsDir);
   const runtime = new WebRuntimeManager(database, artifacts, events, runner, providers, actions);
   const app = express();
@@ -159,7 +161,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
       runner.health(),
     ]);
     res.json({
-      version: '0.5.0',
+      version: '0.6.0',
       providers: providerCapabilities,
       scanners,
       recovery,
@@ -324,6 +326,87 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     const id = z.string().uuid().parse(req.params.id);
     if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
     res.json(recon.list(id));
+  });
+  app.get('/api/v1/sessions/:id/recon-results', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
+    const runId =
+      typeof req.query.runId === 'string' ? z.string().uuid().parse(req.query.runId) : undefined;
+    res.json(recon.results(id, runId));
+  });
+  app.post('/api/v1/sessions/:id/recon-assets/:assetId/interest', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const assetId = z.string().uuid().parse(req.params.assetId);
+    const body = z
+      .object({
+        score: z.number().int().min(0).max(100),
+        reasons: z.array(z.string().trim().min(1).max(240)).min(1).max(20),
+        reviewStatus: z.enum(['new', 'reviewing', 'dismissed', 'promoted']).default('new'),
+      })
+      .strict()
+      .parse(req.body);
+    res.json(recon.markInteresting(id, assetId, body));
+  });
+  app.post('/api/v1/sessions/:id/recon-scan-proposals', async (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const body = z
+      .object({
+        assetIds: z.array(z.string().uuid()).min(1).max(100),
+        action: z.enum(['katana', 'nuclei']),
+        reason: z.string().trim().min(1).max(500),
+      })
+      .strict()
+      .parse(req.body);
+    res.status(201).json(await recon.createScanProposal(id, body));
+  });
+  app.get('/api/v1/sessions/:id/recon-ai-reviews', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    if (!database.getSession(id)) return res.status(404).json({ error: 'session not found' });
+    res.json(reconAI.list(id));
+  });
+  app.post('/api/v1/sessions/:id/recon-ai-reviews', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const excerptSchema = z
+      .object({
+        artifactId: z.string().uuid(),
+        startLine: z.number().int().min(1),
+        endLine: z.number().int().min(1),
+      })
+      .strict()
+      .refine((value) => value.endLine >= value.startLine, 'invalid excerpt range');
+    const body = z
+      .object({
+        runId: z.string().uuid().optional(),
+        objective: z.enum([
+          'general',
+          'interesting-assets',
+          'attack-surface',
+          'unusual-hosts',
+          'technologies',
+          'next-tests',
+          'admin-api-endpoints',
+        ]),
+        assetIds: z.array(z.string().uuid()).max(500).default([]),
+        artifactIds: z.array(z.string().uuid()).max(20).default([]),
+        excerpt: excerptSchema.optional(),
+      })
+      .strict()
+      .parse(req.body);
+    res.status(201).json(reconAI.prepare(id, body));
+  });
+  app.post('/api/v1/sessions/:id/recon-ai-reviews/:reviewId/approve', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const reviewId = z.string().uuid().parse(req.params.reviewId);
+    const body = z
+      .object({ inputHashes: z.array(z.string().regex(/^[a-f0-9]{64}$/)).max(520) })
+      .strict()
+      .parse(req.body);
+    res.status(202).json(reconAI.approve(id, reviewId, body.inputHashes));
+  });
+  app.post('/api/v1/sessions/:id/recon-ai-reviews/:reviewId/cancel', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const reviewId = z.string().uuid().parse(req.params.reviewId);
+    res.json({ cancelled: reconAI.cancel(id, reviewId) });
   });
   app.post('/api/v1/sessions/:id/recon-runs', (req, res) => {
     const id = z.string().uuid().parse(req.params.id);
@@ -539,6 +622,50 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
     const body = artifacts.read(artifact).toString('utf8').slice(0, 200_000);
     database.audit(artifact.sessionId, 'artifact.preview_redacted', { artifactId: id });
     res.json({ artifact, body: redactPreview(body), truncated: artifact.size > 200_000 });
+  });
+  app.get('/api/v1/artifacts/:id/content', (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const artifact = database.getArtifact(id);
+    if (!artifact) return res.status(404).json({ error: 'artifact not found' });
+    if (!/\.(txt|log|json|jsonl|csv|xml|md)$/i.test(artifact.filename))
+      return res.status(415).json({ error: 'artifact type is not supported by the viewer' });
+    const query = z
+      .object({
+        view: z.enum(['redacted', 'raw']).default('redacted'),
+        line: z.coerce.number().int().min(1).default(1),
+        limit: z.coerce.number().int().min(1).max(500).default(200),
+        q: z.string().trim().max(200).optional(),
+      })
+      .parse(req.query);
+    const raw = artifacts.read(artifact).toString('utf8');
+    const rendered = query.view === 'raw' ? raw : redactPreview(raw);
+    const lines = rendered.split(/\r?\n/);
+    const needle = query.q?.toLocaleLowerCase();
+    const matches = needle
+      ? lines
+          .flatMap((text, index) => (text.toLocaleLowerCase().includes(needle) ? [index + 1] : []))
+          .slice(0, 500)
+      : [];
+    const start = Math.min(query.line - 1, Math.max(0, lines.length - 1));
+    database.audit(artifact.sessionId, `artifact.viewer_${query.view}`, {
+      artifactId: id,
+      startLine: start + 1,
+      lineCount: query.limit,
+      searched: Boolean(needle),
+    });
+    return res.json({
+      artifact,
+      view: query.view,
+      startLine: start + 1,
+      totalLines: lines.length,
+      hasMore: start + query.limit < lines.length,
+      lines: lines.slice(start, start + query.limit).map((text, index) => ({
+        number: start + index + 1,
+        text,
+      })),
+      matches,
+      matchesTruncated: matches.length === 500,
+    });
   });
   app.get('/api/v1/artifacts/:id/raw', (req, res) => {
     const id = z.string().uuid().parse(req.params.id);

@@ -129,4 +129,44 @@ describe('Docker scanner boundary', () => {
       ),
     ).rejects.toThrow('raw-socket scanner profile is disabled');
   });
+
+  it('returns sanitized partial output from a non-zero Docker scanner exit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agent-workbench-docker-partial-'));
+    roots.push(root);
+    const fakeDocker = join(root, 'docker');
+    await writeFile(
+      fakeDocker,
+      [
+        `#!${process.execPath}`,
+        "if (process.argv[2] !== 'run') process.exit(0);",
+        'process.stdin.resume();',
+        "process.stdin.on('end', () => {",
+        "  process.stdout.write('api.example.com\\n');",
+        "  process.stderr.write('\\u001b[31mpartial provider failure\\u001b[0m');",
+        '  process.exit(2);',
+        '});',
+      ].join('\n'),
+      { mode: 0o700 },
+    );
+    const runner = new DockerScannerRunner(SAFE_SCANNER_IMAGE, fakeDocker);
+    const result = await runner.subfinder(
+      'example.com',
+      {
+        requestsPerSecond: 5,
+        concurrency: 4,
+        maxUrlsPerHost: 100,
+        maxRedirects: 0,
+        maxRuntimeSeconds: 30,
+        maxOutputBytes: 1024 * 1024,
+      },
+      new AbortController().signal,
+    );
+
+    expect(result).toMatchObject({
+      stdout: 'api.example.com',
+      stderr: 'partial provider failure',
+      exitCode: 2,
+      termination: 'exit',
+    });
+  });
 });
