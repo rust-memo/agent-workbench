@@ -76,8 +76,8 @@ export function newFromConfig(cfg: Config): Client {
         cfg.model || OPENROUTER_DEFAULT_MODEL,
         'openrouter',
         {
-          'HTTP-Referer': 'https://github.com/pentesterflow/agent',
-          'X-OpenRouter-Title': 'PentesterFlow',
+          'HTTP-Referer': 'https://github.com/rust-memo/agent-workbench',
+          'X-OpenRouter-Title': 'Agent Workbench',
         },
         gen,
       );

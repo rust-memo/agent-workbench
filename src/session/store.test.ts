@@ -108,7 +108,7 @@ describe('session.Store', () => {
     expect(mode).toBe(0o600);
   });
 
-  it('writes context snapshots under the pentesterflow context directory', async () => {
+  it('writes context snapshots under the agent-workbench context directory', async () => {
     const store = Store.newWithID(join(tmp, 'sessions'), 'abc123');
     const outPath = await store.saveContextSnapshot('# Context\n\nredacted history');
     expect(outPath).toBe(join(tmp, 'context', 'abc123.md'));

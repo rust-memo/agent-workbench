@@ -68,7 +68,7 @@ export function FirstRunPicker({ onPick, onCancel }: FirstRunPickerProps): JSX.E
   return (
     <Box flexDirection="column" paddingX={2} paddingY={1}>
       <Text bold color="magenta">
-        pentesterflow first-run setup
+        agent-workbench first-run setup
       </Text>
       <Box marginTop={1}>
         <Text>Which tooling should the agent reach for?</Text>

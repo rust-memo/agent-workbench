@@ -579,7 +579,7 @@ export class NmapProposalTool implements Tool {
   async run(args: Record<string, unknown>): Promise<string> {
     if (this.raw && !this.actions.rawProfileAvailable())
       throw new Error(
-        'raw Nmap profile is disabled; the operator must restart the server with PENTESTERFLOW_ENABLE_RAW_SCANNER=1',
+        'raw Nmap profile is disabled; the operator must restart the server with AGENT_WORKBENCH_ENABLE_RAW_SCANNER=1',
       );
     const parsed = z
       .object({

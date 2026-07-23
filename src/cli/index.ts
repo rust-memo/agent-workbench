@@ -111,8 +111,8 @@ function parseFlags(argv: string[]): ParsedFlags {
     burpPort: 9999,
     noStream: false,
     logPath: '',
-    debugSession: process.env.PENTESTERFLOW_DEBUG_SESSION === '1',
-    debugSessionPath: process.env.PENTESTERFLOW_DEBUG_SESSION_PATH ?? '',
+    debugSession: process.env.AGENT_WORKBENCH_DEBUG_SESSION === '1',
+    debugSessionPath: process.env.AGENT_WORKBENCH_DEBUG_SESSION_PATH ?? '',
     listSkills: false,
     listTools: false,
   };
@@ -288,7 +288,7 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  // Skills: walk built-in + project-local (.pentesterflow/skills) + user dirs.
+  // Skills: walk built-in + project-local (.agent-workbench/skills) + user dirs.
   const skills = new SkillRegistry();
   const allSkillDirs = skillSearchDirs(cfg.skills_dirs);
   for (const d of allSkillDirs) skills.loadDir(d);
@@ -373,7 +373,7 @@ async function main(): Promise<number> {
   // `#`-saved fact stays in context for the rest of the session and beyond.
   const memoryStore = new MemoryStore();
   // Operator-authored engagement notes (scope/rules/creds). Read once at
-  // startup from project + home .pentesterflow/engagement.md; always injected
+  // startup from project + home .agent-workbench/engagement.md; always injected
   // into the system prompt so it survives compaction unconditionally.
   const engagement = new EngagementStore().load();
 
@@ -447,7 +447,7 @@ async function main(): Promise<number> {
     try {
       const result = await startBurpBridge(flags.burpPort);
       process.stderr.write(
-        `PentesterFlow Burp bridge listening at ${result.url}\nPentesterFlow Burp bridge token: ${result.token}\nSet both values in the Burp plugin.\n`,
+        `Agent Workbench Burp bridge listening at ${result.url}\nAgent Workbench Burp bridge token: ${result.token}\nSet both values in the Burp plugin.\n`,
       );
     } catch (err) {
       process.stderr.write(
@@ -496,7 +496,7 @@ async function main(): Promise<number> {
 
   // First-run setup. Asked exactly once, before the agent is built (so
   // the system prompt is constructed with the chosen profile). The
-  // answer persists in ~/.pentesterflow/config.json so subsequent
+  // answer persists in ~/.agent-workbench/config.json so subsequent
   // launches skip this step.
   if (cfg.tooling_profile === undefined) {
     const picked = await runFirstRunPicker();
@@ -602,7 +602,7 @@ async function main(): Promise<number> {
   for (const d of skillDirsToWatch) watchDir(d);
 
   // When the user scaffolds a skill via `/skills new`, its dir (e.g.
-  // ./.pentesterflow/skills) may not have existed at startup, so it wasn't being
+  // ./.agent-workbench/skills) may not have existed at startup, so it wasn't being
   // watched. Add it to the reload walk + a watcher so subsequent edits
   // hot-reload like any other skill.
   const onSkillCreated = (skillRootDir: string): void => {
@@ -853,7 +853,7 @@ function buildResumeSummary(sessionID: string, memory: string): string {
 }
 
 function buildExitResumeHint(sessionID: string): string {
-  return `Resume this session: pentesterflow --resume ${sessionID}`;
+  return `Resume this session: agent-workbench --resume ${sessionID}`;
 }
 
 function prettyCwd(): string {
@@ -892,10 +892,10 @@ async function runFirstRunPicker(): Promise<config.ToolingProfile | null> {
 }
 
 function printHelp(): void {
-  process.stdout.write(`pentesterflow ${VERSION}
+  process.stdout.write(`agent-workbench ${VERSION}
 
 Usage:
-  pentesterflow [flags]
+  agent-workbench [flags]
 
 Flags:
   --backend ollama|lmstudio|openai-compat|kimi|groq|openrouter|deepseek|gemini
@@ -905,7 +905,7 @@ Flags:
   --skills <dirs>            comma-separated extra skill directories
   --resume <session-id>
   --browser                  enable Browser MCP for this session only (not persisted)
-  --burp [port]              start local Burp/PentesterFlow bridge (default :9999)
+  --burp [port]              start local Burp/Agent Workbench bridge (default :9999)
   --browser-ingest [port]    deprecated alias for --burp
   --no-stream                disable streaming chat (fallback for backends
                              whose SSE/ND-JSON path drops tool_calls)

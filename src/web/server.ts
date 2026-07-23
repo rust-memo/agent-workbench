@@ -70,7 +70,7 @@ const turnBody = z
 
 export async function startWebServer(options: WebServerOptions = {}): Promise<WebServerHandle> {
   const port = validPort(options.port ?? 9099);
-  const dataDir = resolve(options.dataDir ?? join(process.cwd(), '.pentesterflow', 'web'));
+  const dataDir = resolve(options.dataDir ?? join(process.cwd(), '.agent-workbench', 'web'));
   const uiDir = resolve(options.uiDir ?? join(process.cwd(), 'web-ui', 'dist'));
   const database = new WebDatabase(join(dataDir, 'workbench.sqlite3'));
   const events = new EventHub(database);
@@ -81,7 +81,7 @@ export async function startWebServer(options: WebServerOptions = {}): Promise<We
   const pairing = new PairingManager();
   const runner = new DockerScannerRunner();
   const providers = new WebProviderManager(
-    options.ollamaBaseURL ?? process.env.PENTESTERFLOW_OLLAMA_URL ?? 'http://127.0.0.1:11434',
+    options.ollamaBaseURL ?? process.env.AGENT_WORKBENCH_OLLAMA_URL ?? 'http://127.0.0.1:11434',
   );
   const actions = new ActionService(database, artifacts, events, runner);
   const recon = new ReconService(database, artifacts, events, runner, actions);

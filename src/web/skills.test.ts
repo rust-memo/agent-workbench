@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { listWebSkills, loadWebSkillRegistry } from './skills.js';
 
 describe('Web skill catalog', () => {
-  it('loads inherited and curated skills into the restricted Web runtime', () => {
+  it('loads core and curated skills into the restricted Web runtime', () => {
     const registry = loadWebSkillRegistry();
     expect(registry.has('recon')).toBe(true);
     expect(registry.has('api-authorization')).toBe(true);

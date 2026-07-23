@@ -65,12 +65,10 @@ export function listWebSkills(): WebSkillSummary[] {
       category: metadata?.category ?? inferCategory(skill.name),
       risk: metadata?.risk ?? 'medium',
       compatibility: metadata?.compatibility ?? ['cli', 'web'],
-      source: metadata?.source ?? 'https://github.com/PentesterFlow/agent/tree/main/skills',
+      source: metadata?.source ?? 'https://github.com/rust-memo/agent-workbench/tree/main/skills',
       sourceCommit: metadata?.sourceCommit,
       license: metadata?.license ?? 'Apache-2.0',
-      provenance:
-        metadata?.provenance ??
-        'Inherited from the PentesterFlow skill catalog included in this fork.',
+      provenance: metadata?.provenance ?? 'Included in the core Agent Workbench skill catalog.',
     };
   });
 }

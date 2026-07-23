@@ -24,7 +24,7 @@ describe('assertInstallerURL (L10)', () => {
     expect(() => assertInstallerURL('file:///etc/passwd')).toThrow(/non-https/);
   });
 
-  it('rejects an unexpected host (tampered PENTESTERFLOW_REPO)', () => {
+  it('rejects an unexpected host (tampered AGENT_WORKBENCH_REPO)', () => {
     expect(() => assertInstallerURL('https://evil.example.com/x/main/install.sh')).toThrow(
       /unexpected host/,
     );

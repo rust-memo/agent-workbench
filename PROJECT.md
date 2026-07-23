@@ -1,17 +1,17 @@
-# PentesterFlow — Complete Project Documentation
+# Agent Workbench — Complete Project Documentation
 
-> **`@pentesterflow/agent`** — Human-in-the-loop agentic AI CLI for penetration testers
+> **`@agent-workbench/agent`** — Human-in-the-loop agentic AI CLI for penetration testers
 > and bug hunters. An open-source terminal assistant for *authorized* offensive-security
 > work that connects to local or hosted LLMs, plans against a scoped target, runs real
 > pentesting tools behind permission gates, remembers lessons across sessions, and writes
 > evidence-backed findings.
 
-- **Package:** `@pentesterflow/agent` · version `0.1.0-dev`
+- **Package:** `@agent-workbench/agent` · version `0.1.0-dev`
 - **License:** Apache-2.0 · **Node:** `>=20`
 - **Language:** TypeScript (ESM) · ~24,000 LOC across 143 source files · 57 test files
 - **Runtime UI:** Ink (React for the terminal)
-- **Binaries:** `pentesterflow` (the CLI) and `pentesterflow-browser-mcp` (capture MCP server)
-- **Repo homepage:** https://github.com/pentesterflow/agent
+- **Binaries:** `agent-workbench` (the CLI) and `agent-workbench-browser-mcp` (capture MCP server)
+- **Repo homepage:** https://github.com/rust-memo/agent-workbench
 
 ---
 
@@ -39,7 +39,7 @@
 
 ## 1. What it is & design philosophy
 
-PentesterFlow assists across the full pentest lifecycle — **scope → recon → enumeration →
+Agent Workbench assists across the full pentest lifecycle — **scope → recon → enumeration →
 validation → coverage → reporting → learning** — while keeping the analyst in control.
 
 It is built around three ideas:
@@ -149,7 +149,7 @@ rendering), `pino` (logging), `execa` (subprocess), `fast-glob` (search),
 19. **Mount the Ink app** (`render(<App .../>)`), wiring publisher bridges, `applyProvider`
     (live `/provider` + `/model` swaps re-probe), `startBurpBridge`, etc.
 20. **On exit**, trip the root abort, close watchers, MCP sessions, and the Burp bridge; print
-    a `pentesterflow --resume <id>` hint.
+    a `agent-workbench --resume <id>` hint.
 
 **Provider helper functions** in this file map backends to labels, default endpoints, locality
 (local vs remote), the effective auto-compact threshold (Groq caps at 5500, Kimi sizes to its
@@ -345,7 +345,7 @@ ranges, or localhost names.
 
 **Sensitive paths** (`sensitive.ts`) — `/etc/shadow`, `/etc/sudoers`, `master.passwd`, and
 home-relative `.ssh`, `.aws`, `.gnupg`, `.gcloud`, `.kube`, `.docker`, `.config/gcloud`,
-`.config/op`, `.netrc`, `.pgpass`, `.npmrc`, `.pypirc`, `.pentesterflow`, and shell/REPL
+`.config/op`, `.netrc`, `.pgpass`, `.npmrc`, `.pypirc`, `.agent-workbench`, and shell/REPL
 histories (`.bash_history`, `.zsh_history`, `.python_history`, `.mysql_history`,
 `.psql_history`). Checked by exact match **or** directory prefix (so `.ssh_other` does *not*
 match `.ssh`), against both lexical and symlink-resolved real paths.
@@ -397,9 +397,9 @@ disable-model-invocation: false   # optional — true = only reachable via /skil
 **Discovery order** (later wins on name collision):
 
 1. Built-in `skills/` (shipped)
-2. Project-local `./.pentesterflow/skills/`
-3. `~/.pentesterflow/builtin-skills/` (installer-managed)
-4. Personal `~/.pentesterflow/skills/`
+2. Project-local `./.agent-workbench/skills/`
+3. `~/.agent-workbench/builtin-skills/` (installer-managed)
+4. Personal `~/.agent-workbench/skills/`
 5. `--skills <dirs>` / config `skills_dirs`
 
 Dotfiles and `_`-prefixed dirs (e.g. `_template/`) are skipped. The `Registry` tracks
@@ -419,7 +419,7 @@ bugs"). Supporting files: `discovery.ts`, `loadSkill.ts`, `registry.ts`, `templa
 
 ### Sessions (`src/session/store.ts`)
 
-Saved to `~/.pentesterflow/sessions/<uuid>.json`:
+Saved to `~/.agent-workbench/sessions/<uuid>.json`:
 
 ```jsonc
 {
@@ -434,7 +434,7 @@ Saved to `~/.pentesterflow/sessions/<uuid>.json`:
 
 Crash-safe atomic writes (`*.tmp.<hex>` → fsync → rename); stale temps > 1 min cleaned at
 startup; corrupt files skipped on listing. `--resume <id>` reloads messages/target/memory and
-shows a recap. 5-minute automatic context snapshots go to `~/.pentesterflow/context/*.md`
+shows a recap. 5-minute automatic context snapshots go to `~/.agent-workbench/context/*.md`
 (redacted).
 
 ### Continuous learning (`src/intelligence/store.ts`)
@@ -442,8 +442,8 @@ shows a recap. 5-minute automatic context snapshots go to `~/.pentesterflow/cont
 A local **Continuous Learning System** that improves future sessions with no retraining.
 Scenarios stored as JSONL:
 
-- **Project scope:** `./.pentesterflow/intelligence/scenarios.jsonl`
-- **Personal scope:** `~/.pentesterflow/intelligence/scenarios.jsonl`
+- **Project scope:** `./.agent-workbench/intelligence/scenarios.jsonl`
+- **Personal scope:** `~/.agent-workbench/intelligence/scenarios.jsonl`
 - Plus a small hardcoded builtin seed.
 
 Each `IntelligenceScenario` = `{ id, title, category, triggers[], technologies[], lesson,
@@ -492,13 +492,13 @@ heading + impact/payload/evidence/repro-curl/remediation sections.
 - **`BurpTask`** / **`BurpIssue`** — bounded arrays (1000 each).
 
 **Ingest server** (`server.ts`) — binds `127.0.0.1` only; auth via timing-safe
-`X-Pentesterflow-Token`; CORS limited to `chrome-extension://`; endpoints
+`X-Agent-Workbench-Token`; CORS limited to `chrome-extension://`; endpoints
 `POST /ingest|/snapshot|/burp/task|/burp/issues`, `GET /status|/endpoints|/requests|/burp/*`,
 `DELETE /clear`; 4 MiB body cap. Started by `--burp [port]` (default 9999) or `/burp`.
 
-**Standalone MCP server** (`mcpServer.ts` → `pentesterflow-browser-mcp` binary) exposes the same
+**Standalone MCP server** (`mcpServer.ts` → `agent-workbench-browser-mcp` binary) exposes the same
 capture data to any MCP client (`--port`, `--max-entries`, `--log`). The companion **Burp
-plugin** lives in `burp-plugin/pentesterflow_burp.py`: send selected Burp requests into the CLI,
+plugin** lives in `burp-plugin/agent-workbench_burp.py`: send selected Burp requests into the CLI,
 queue scan tasks, and import confirmed findings back into Burp as issues.
 
 ---
@@ -537,7 +537,7 @@ bridges.
 
 ## 13. Configuration & data paths
 
-**Config** `~/.pentesterflow/config.json` (override via `PENTESTERFLOW_CONFIG`). Zod-validated
+**Config** `~/.agent-workbench/config.json` (override via `AGENT_WORKBENCH_CONFIG`). Zod-validated
 schema (`ConfigSchema`): `backend` (default `''`), `model`, `base_url`, `api_key`,
 `skills_dirs[]`, `disabled_skills[]`, `mcp_servers[]` (`{name, command, args[], env?}`),
 `plugins[]` (`{name, command, args[], description, schema?, requires_permission}`),
@@ -550,24 +550,24 @@ defaults are used.
 
 > **Runtime artifacts in the working directory.** A live engagement directory also accumulates
 > non-source data the agent produces: `./findings/*.md` + `coverage-*.json`,
-> `./.pentesterflow/intelligence/scenarios.jsonl`, and any analyst-created recon/loot folders
+> `./.agent-workbench/intelligence/scenarios.jsonl`, and any analyst-created recon/loot folders
 > (e.g. `recon/`, `pivot/`). These are *outputs*, not part of the codebase, and are git-ignored
 > or treated as engagement data.
 
 | Path | Contents |
 |---|---|
-| `~/.pentesterflow/config.json` | Backend/model/endpoint/disabled-skill settings |
-| `~/.pentesterflow/sessions/*.json` | Saved sessions for `--resume` |
-| `~/.pentesterflow/context/*.md` | Redacted context snapshots (5-min auto) |
-| `./.pentesterflow/intelligence/scenarios.jsonl` | Project intelligence |
-| `~/.pentesterflow/intelligence/scenarios.jsonl` | Personal reusable intelligence |
-| `~/.pentesterflow/builtin-skills/<name>/SKILL.md` | Installer-managed shipped skills |
-| `~/.pentesterflow/skills/<name>/SKILL.md` | Personal skills |
-| `./.pentesterflow/skills/<name>/SKILL.md` | Project-local skills |
+| `~/.agent-workbench/config.json` | Backend/model/endpoint/disabled-skill settings |
+| `~/.agent-workbench/sessions/*.json` | Saved sessions for `--resume` |
+| `~/.agent-workbench/context/*.md` | Redacted context snapshots (5-min auto) |
+| `./.agent-workbench/intelligence/scenarios.jsonl` | Project intelligence |
+| `~/.agent-workbench/intelligence/scenarios.jsonl` | Personal reusable intelligence |
+| `~/.agent-workbench/builtin-skills/<name>/SKILL.md` | Installer-managed shipped skills |
+| `~/.agent-workbench/skills/<name>/SKILL.md` | Personal skills |
+| `./.agent-workbench/skills/<name>/SKILL.md` | Project-local skills |
 | `./findings/<slug>.md` | Confirmed findings |
 | `./findings/coverage-<session-id>.json` | Coverage state |
-| `~/.pentesterflow/logs/pentesterflow.log` | JSON-lines logs (rotates at 4 MB) |
-| `~/.pentesterflow/debug/session-*.jsonl` | Opt-in full session debug logs |
+| `~/.agent-workbench/logs/agent-workbench.log` | JSON-lines logs (rotates at 4 MB) |
+| `~/.agent-workbench/debug/session-*.jsonl` | Opt-in full session debug logs |
 
 ---
 
@@ -580,12 +580,12 @@ defaults are used.
   first/last 2 chars.
 - **Permission** (`src/permission/permission.ts`) — `Prompter` interface, `Request`/`Decision`
   types, `YoloPrompter`.
-- **Logging** (`src/logger/`) — pino JSON-lines to `~/.pentesterflow/logs/pentesterflow.log`
+- **Logging** (`src/logger/`) — pino JSON-lines to `~/.agent-workbench/logs/agent-workbench.log`
   (4 MB rotation); optional `sessionDebug` JSONL (`--debug-session`).
 - **Target** (`src/target/target.ts`) — `{ baseURL, name }` shared by the HTTP tool and system
   prompt; `/target` updates propagate live.
 - **Self-update** (`src/update/selfUpdate.ts`) — `/update [version]` runs the GitHub
-  `install.sh`/`install.ps1` (5-min timeout); repo via `PENTESTERFLOW_REPO`.
+  `install.sh`/`install.ps1` (5-min timeout); repo via `AGENT_WORKBENCH_REPO`.
 - **Version** (`src/version/version.ts`) — `VERSION` baked at build via tsup
   `define __BUILD_VERSION__` (fallback `dev`).
 
@@ -696,7 +696,7 @@ skills/           recon webvuln ssrf ssti jwt graphql race takeover
 
 skills/           recon webvuln ssrf ssti jwt graphql race takeover
                   supabase deserialize _template README.md
-burp-plugin/      pentesterflow_burp.py + README.md
+burp-plugin/      agent-workbench_burp.py + README.md
 scripts/          build-binaries.sh (standalone-binary build)
 install.sh / install.ps1   standalone-binary installers (verify SHA-256)
 assets/logo.png · tsup.config.ts / tsconfig.json / vitest.config.ts / biome.json
