@@ -142,10 +142,12 @@ try {
 
     $sourceRoot = Join-Path $tmp 'source'
     Expand-Archive -Path $archive -DestinationPath $sourceRoot -Force
-    $skillsSrc = Get-ChildItem -Path $sourceRoot -Directory -Recurse |
-      Where-Object { $_.Name -eq 'skills' } |
-      Select-Object -First 1
-    if (-not $skillsSrc) {
+    $repoRoot = Get-ChildItem -LiteralPath $sourceRoot -Directory | Select-Object -First 1
+    if (-not $repoRoot) {
+      throw "repository root not found in the $ver source archive"
+    }
+    $skillsPath = Join-Path $repoRoot.FullName 'skills'
+    if (-not (Test-Path -LiteralPath $skillsPath -PathType Container)) {
       throw "skills directory not found in the $ver source archive"
     }
 
@@ -154,7 +156,7 @@ try {
     $skillsStage = "$skillsDir.tmp.$PID"
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath $skillsStage
     New-Item -ItemType Directory -Force -Path $skillsStage | Out-Null
-    Copy-Item -Recurse -Force -Path (Join-Path $skillsSrc.FullName '*') -Destination $skillsStage
+    Copy-Item -Recurse -Force -Path (Join-Path $skillsPath '*') -Destination $skillsStage
   }
 
   $dest = Join-Path $dir "$Bin.exe"
