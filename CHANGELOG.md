@@ -42,7 +42,8 @@ All notable changes to this project are documented here. The format is based on
   `latest` to an immutable release tag before downloading, then stage the
   binary, checksum, and shipped skills from that same tag. They no longer fall
   back to `main`, and a skills download failure cannot silently produce a
-  mixed-version installation.
+  mixed-version installation. The archive lookup selects only the repository's
+  top-level `skills` catalog instead of accidentally matching `src/skills`.
 - **Redaction gaps** — connection-string query-param credentials
   (`?password=` / `&auth=` / `&access_token=`), HTTP Digest `response=` hashes,
   and GCP service-account `private_key_id` are now masked.

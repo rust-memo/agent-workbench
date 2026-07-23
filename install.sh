@@ -139,7 +139,10 @@ if [ "${AGENT_WORKBENCH_SKIP_SKILLS:-}" != "1" ]; then
   mkdir -p "${tmp}/source"
   tar -xzf "${tmp}/source.tar.gz" -C "${tmp}/source" ||
     err "failed to extract skills archive for ${ver}"
-  skills_src=$(find "${tmp}/source" -type d -path "*/skills" | head -n1)
+  source_root=$(find "${tmp}/source" -mindepth 1 -maxdepth 1 -type d | head -n1)
+  [ -n "$source_root" ] && [ -d "$source_root" ] ||
+    err "repository root not found in the ${ver} source archive"
+  skills_src="${source_root}/skills"
   [ -n "$skills_src" ] && [ -d "$skills_src" ] ||
     err "skills directory not found in the ${ver} source archive"
 
