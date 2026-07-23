@@ -153,13 +153,35 @@ export class ActionService {
     const engagement = this.database.getEngagement(proposal.engagementId);
     if (!engagement || engagement.scope.version !== proposal.scopeVersion)
       throw new Error('scope changed before action execution');
+    let partialArtifactId: string | undefined;
+    const reconRun = this.reconRunForProposal(proposal);
+    const reconToolRun = reconRun
+      ? this.database.createReconToolRun({
+          reconRunId: reconRun.id,
+          engagementId: proposal.engagementId,
+          sessionId: proposal.sessionId,
+          tool: proposal.action,
+          actionName: `approved_${proposal.action}`,
+          metadata: { proposalId: proposal.id, approvalHash: proposal.approvalHash },
+        })
+      : undefined;
+    if (reconRun && reconToolRun)
+      this.publishReconTool(reconRun.id, proposal, reconToolRun.id, 'queued');
     try {
+      if (reconRun && reconToolRun) {
+        this.database.updateReconToolRun(reconToolRun.id, 'running');
+        this.publishReconTool(reconRun.id, proposal, reconToolRun.id, 'running');
+      }
       const execution = await this.execute(proposal, engagement.scope, signal);
       const { result, targets } = execution;
-      if (result.exitCode !== 0)
-        throw new Error(
-          `${proposal.action} exited ${result.exitCode}: ${result.stderr.slice(0, 1000)}`,
-        );
+      const metrics = scannerMetrics(result.stdout);
+      if (reconRun && reconToolRun) {
+        this.database.updateReconToolRun(reconToolRun.id, 'saving', {
+          exitCode: result.exitCode,
+          ...metrics,
+        });
+        this.publishReconTool(reconRun.id, proposal, reconToolRun.id, 'saving');
+      }
       const artifactKind = artifactDetails(proposal.action);
       const artifact = await this.artifacts.save({
         engagementId: proposal.engagementId,
@@ -177,13 +199,49 @@ export class ActionService {
           scannerIsolation: 'docker',
           scannerProfile: result.profile,
           scannerImage: result.image,
+          exitCode: result.exitCode,
+          termination: result.termination,
+          partial: result.exitCode !== 0 || result.termination !== 'exit',
           ...(proposal.action === 'nuclei'
             ? { templatesCommit: '7d66fa06cc0a5ad85f7bf35f18cf8ee9218fa9a5' }
             : {}),
         },
+        directory: reconRun
+          ? [
+              'engagements',
+              proposal.engagementId,
+              'recon',
+              reconRun.id,
+              proposal.action,
+              proposal.id,
+            ]
+          : undefined,
       });
+      partialArtifactId = artifact.id;
+      if (reconRun && reconToolRun)
+        this.database.linkReconArtifact({
+          runId: reconRun.id,
+          toolRunId: reconToolRun.id,
+          artifactId: artifact.id,
+          role: 'raw',
+        });
       this.recordResults(proposal, artifact.id, targets, result.stdout, engagement.scope);
+      if (result.exitCode !== 0)
+        throw new Error(
+          `${proposal.action} exited ${result.exitCode}: ${result.stderr.slice(0, 1000)}`,
+        );
       this.database.finishActionProposal(proposal.id, 'completed', artifact.id);
+      if (reconRun && reconToolRun) {
+        this.database.updateReconToolRun(reconToolRun.id, 'completed', {
+          exitCode: result.exitCode,
+          ...metrics,
+          artifactIds: [artifact.id],
+        });
+        this.publishReconTool(reconRun.id, proposal, reconToolRun.id, 'completed', {
+          artifactIds: [artifact.id],
+          ...metrics,
+        });
+      }
       this.events.publish({
         engagementId: proposal.engagementId,
         sessionId: proposal.sessionId,
@@ -194,7 +252,36 @@ export class ActionService {
     } catch (error) {
       const status = signal.aborted ? 'cancelled' : 'failed';
       const message = clean(error instanceof Error ? error.message : String(error)).slice(0, 1000);
-      this.database.finishActionProposal(proposal.id, status, undefined, message);
+      this.database.finishActionProposal(proposal.id, status, partialArtifactId, message);
+      if (reconRun && reconToolRun) {
+        const toolStatus = signal.aborted
+          ? 'cancelled'
+          : /timed?\s*out|timeout/i.test(message)
+            ? 'timed_out'
+            : 'failed';
+        const artifact = partialArtifactId
+          ? this.database.getArtifact(partialArtifactId)
+          : undefined;
+        const metrics = artifact
+          ? scannerMetrics(this.artifacts.read(artifact).toString('utf8'))
+          : { rawResults: 0, validResults: 0, uniqueResults: 0 };
+        this.database.updateReconToolRun(reconToolRun.id, toolStatus, {
+          ...metrics,
+          artifactIds: partialArtifactId ? [partialArtifactId] : [],
+          error: message,
+        });
+        this.publishReconTool(reconRun.id, proposal, reconToolRun.id, toolStatus, {
+          artifactIds: partialArtifactId ? [partialArtifactId] : [],
+          ...metrics,
+          error: message,
+        });
+        if (partialArtifactId && metrics.validResults > 0)
+          this.publishReconTool(reconRun.id, proposal, reconToolRun.id, 'partial', {
+            artifactIds: [partialArtifactId],
+            ...metrics,
+            terminalStatus: toolStatus,
+          });
+      }
       this.events.publish({
         engagementId: proposal.engagementId,
         sessionId: proposal.sessionId,
@@ -203,11 +290,50 @@ export class ActionService {
         payload: {
           proposalId: proposal.id,
           action: proposal.action,
+          ...(partialArtifactId
+            ? { artifactId: partialArtifactId, partialResultsSaved: true }
+            : {}),
           ...(status === 'failed' ? { error: message } : {}),
         },
       });
       throw error;
     }
+  }
+
+  private reconRunForProposal(proposal: ActionProposalRecord) {
+    if (proposal.action === 'validate_http') return undefined;
+    const artifactId =
+      typeof proposal.arguments.inputArtifactId === 'string'
+        ? proposal.arguments.inputArtifactId
+        : undefined;
+    const artifact = artifactId ? this.database.getArtifact(artifactId) : undefined;
+    const runId =
+      typeof artifact?.metadata.runId === 'string' ? artifact.metadata.runId : undefined;
+    const run = runId ? this.database.getReconRun(runId) : undefined;
+    return run?.sessionId === proposal.sessionId ? run : undefined;
+  }
+
+  private publishReconTool(
+    runId: string,
+    proposal: ActionProposalRecord,
+    toolRunId: string,
+    status: string,
+    detail: Record<string, unknown> = {},
+  ): void {
+    this.events.publish({
+      engagementId: proposal.engagementId,
+      sessionId: proposal.sessionId,
+      turnId: proposal.turnId,
+      type: `recon.tool.${status}`,
+      payload: {
+        runId,
+        toolRunId,
+        tool: proposal.action,
+        proposalId: proposal.id,
+        status,
+        ...detail,
+      },
+    });
   }
 
   private async execute(
@@ -572,6 +698,24 @@ function parseJsonLines(value: string): Record<string, unknown>[] {
         return [];
       }
     });
+}
+
+function scannerMetrics(value: string): {
+  rawResults: number;
+  validResults: number;
+  uniqueResults: number;
+} {
+  const lines = value.split(/\r?\n/).filter(Boolean);
+  const parsed = parseJsonLines(value);
+  const values =
+    parsed.length > 0
+      ? parsed.flatMap(extractCandidateValues).map((item) => item.toLowerCase())
+      : lines;
+  return {
+    rawResults: lines.length,
+    validResults: parsed.length > 0 ? parsed.length : lines.length,
+    uniqueResults: new Set(values).size,
+  };
 }
 
 function safeHttpUrl(value: string): URL | undefined {

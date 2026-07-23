@@ -111,7 +111,7 @@ irm https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.ps1
 Pin a release or choose an install directory:
 
 ```sh
-AGENT_WORKBENCH_VERSION=v0.5.0 AGENT_WORKBENCH_INSTALL_DIR="$HOME/.local/bin" \
+AGENT_WORKBENCH_VERSION=v0.6.0 AGENT_WORKBENCH_INSTALL_DIR="$HOME/.local/bin" \
   sh -c "$(curl -fsSL https://raw.githubusercontent.com/rust-memo/agent-workbench/main/install.sh)"
 ```
 
@@ -152,7 +152,7 @@ agent-workbench --resume <session-id>
 On resume, Agent Workbench automatically shows a recap of the previous session's
 persistent memory so you can continue without manually reconstructing context.
 
-## Local Web Workbench (v0.5.0)
+## Local Web Workbench (v0.6.0)
 
 The Web workbench keeps the existing CLI intact and adds an English-only,
 terminal-style local interface. Web sessions use SQLite as their only source of
@@ -197,11 +197,27 @@ Open the single-use pairing URL printed in the terminal. The fragment is
 exchanged for an HttpOnly, SameSite=Strict session cookie and is removed from
 the browser address bar immediately.
 
-v0.5.0 introduces a Recon-first workspace with a scope form, Quick/Standard/Advanced
+v0.6.0 extends the Recon-first workspace with a scope form, Quick/Standard/Advanced
 profiles, persisted step-by-step runs, ranked live assets, manual-test recommendations,
 and a compact audit terminal. A run moves through Scope, optional passive discovery,
 DNS, HTTP probing, and deterministic analysis. Standard and Advanced profiles create
 single-use approval proposals for deeper scanners; they never run those actions silently.
+
+Recon runs also persist a structured result workspace. Every supported tool has
+its own queued/running/saving/terminal lifecycle, raw and parsed artifacts, exit
+metadata, and partial stdout/stderr on failure. Normalized assets are deduplicated
+without losing source attribution. After passive discovery, the workbench writes
+`combined/all-domains.txt`, `all-domains-with-sources.json`, and
+`duplicates.json`; authorized in-scope domains then flow through DNSX and HTTPX.
+HTTPX writes structured `live-hosts.jsonl`, a simple `live-hosts.txt`,
+`failed-inputs.txt`, and `summary.json`.
+
+Open **Recon Results** for searchable Assets, Tool Runs, Combined, HTTPX, Files,
+and AI Review tabs. Text, JSON, JSONL, CSV, XML, and Markdown artifacts are
+served only through authenticated, audited endpoints and can be searched or
+viewed in paginated raw/redacted form. AI Review always shows a redacted,
+hash-bound payload preview before dispatch and stores the response as an
+auditable artifact linked to its exact input hashes.
 
 The Web skill catalog now loads the core Agent Workbench skills plus curated
 API authorization, OAuth/OIDC, business-logic, request-smuggling, and file-upload
@@ -214,7 +230,7 @@ Ollama/Qwen Code/Codex CLI/Claude CLI/OpenCode/OpenClaude provider and checked-m
 Subfinder, DNSX, HTTPX, Katana, Nuclei, FFUF, Nmap connect scanning, an opt-in
 raw-socket Nmap profile, SQLite event replay, cancellation,
 hash-addressed artifacts, approval proposals, Findings, and Coverage. The
-safe scanners run in an ephemeral `agent-workbench-scanner-safe:0.5.0` container.
+safe scanners run in an ephemeral `agent-workbench-scanner-safe:0.6.0` container.
 The server owns the image, entrypoint, flags, network mode, resource limits,
 user, and capabilities; targets are sent through stdin. Safe scanner containers
 are read-only, non-root, capability-free, `no-new-privileges`, resource-limited,
@@ -277,7 +293,7 @@ available through the Web action. Scanner matches are stored as
 confirmation is explicit and audited.
 
 Nmap connect scanning uses the non-raw safe image. SYN scanning is isolated in
-`agent-workbench-scanner-raw:0.5.0`, disabled by default, never uses
+`agent-workbench-scanner-raw:0.6.0`, disabled by default, never uses
 `--privileged`, and receives only `NET_RAW` after starting the server with
 `AGENT_WORKBENCH_ENABLE_RAW_SCANNER=1`. FFUF uses the server-owned bounded
 wordlist, request limits, and fixed argument builder; the model cannot choose a
@@ -316,6 +332,13 @@ AGENT_WORKBENCH_WEB_PORT=9099 \
 AGENT_WORKBENCH_OLLAMA_URL=http://127.0.0.1:11434 \
 AGENT_WORKBENCH_OLLAMA_MODEL=qwen3:8b \
 npm run start:web
+```
+
+Run the repeatable browser workflow with Playwright (set the Chrome path only
+when Playwright's bundled Chromium is not installed):
+
+```sh
+AGENT_WORKBENCH_E2E_CHROME=/path/to/google-chrome npm run test:e2e
 ```
 
 Qwen Code is launched with `--safe-mode`, sandboxing, structured JSON output,

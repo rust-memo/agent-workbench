@@ -8,6 +8,8 @@ dist/
 .tsbuildinfo
 .tsimp/
 .vitest/
+/test-results/
+/playwright-report/
 
 # Editor / local tooling
 .idea/

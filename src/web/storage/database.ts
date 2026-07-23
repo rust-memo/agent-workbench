@@ -3,16 +3,24 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import type {
+  AIReviewRecord,
   ActionProposalRecord,
   ArtifactRecord,
+  AssetInterest,
   CoverageStatus,
   FindingStatus,
+  ReconArtifactLink,
+  ReconAsset,
+  ReconAssetSource,
+  ReconHttpResult,
   ReconInsightRecord,
   ReconProfile,
   ReconRunRecord,
   ReconRunStatus,
   ReconStepRecord,
   ReconStepStatus,
+  ReconToolRunRecord,
+  ReconToolRunStatus,
   RuntimeEvent,
   ScopeDefinition,
   WebCoverageRecord,
@@ -248,6 +256,134 @@ export class WebDatabase {
       );
       CREATE INDEX IF NOT EXISTS recon_insights_run_priority
         ON recon_insights(run_id, priority, created_at DESC);
+      CREATE TABLE IF NOT EXISTS recon_tool_runs (
+        id TEXT PRIMARY KEY,
+        recon_run_id TEXT NOT NULL REFERENCES recon_runs(id) ON DELETE CASCADE,
+        engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        tool TEXT NOT NULL,
+        action_name TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('queued','running','saving','completed','failed','cancelled','timed_out')),
+        started_at TEXT,
+        ended_at TEXT,
+        exit_code INTEGER,
+        raw_results INTEGER NOT NULL DEFAULT 0,
+        valid_results INTEGER NOT NULL DEFAULT 0,
+        unique_results INTEGER NOT NULL DEFAULT 0,
+        artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+        error TEXT,
+        partial_stdout TEXT,
+        partial_stderr TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS recon_tool_runs_run_created
+        ON recon_tool_runs(recon_run_id, created_at);
+      CREATE TABLE IF NOT EXISTS recon_assets (
+        id TEXT PRIMARY KEY,
+        engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL REFERENCES recon_runs(id) ON DELETE CASCADE,
+        value TEXT NOT NULL,
+        normalized_value TEXT NOT NULL,
+        type TEXT NOT NULL CHECK(type IN ('domain','subdomain','url','ip')),
+        in_scope INTEGER NOT NULL CHECK(in_scope IN (0,1)),
+        active_testing_allowed INTEGER NOT NULL CHECK(active_testing_allowed IN (0,1)),
+        dns_json TEXT,
+        http_json TEXT,
+        first_seen_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        UNIQUE(run_id, normalized_value)
+      );
+      CREATE INDEX IF NOT EXISTS recon_assets_session_value
+        ON recon_assets(session_id, normalized_value);
+      CREATE INDEX IF NOT EXISTS recon_assets_run_scope
+        ON recon_assets(run_id, in_scope, type);
+      CREATE TABLE IF NOT EXISTS recon_asset_sources (
+        id TEXT PRIMARY KEY,
+        asset_id TEXT NOT NULL REFERENCES recon_assets(id) ON DELETE CASCADE,
+        tool TEXT NOT NULL,
+        run_id TEXT NOT NULL REFERENCES recon_runs(id) ON DELETE CASCADE,
+        tool_run_id TEXT NOT NULL REFERENCES recon_tool_runs(id) ON DELETE CASCADE,
+        artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL,
+        raw_value TEXT NOT NULL,
+        discovered_at TEXT NOT NULL,
+        UNIQUE(asset_id, tool_run_id, raw_value)
+      );
+      CREATE INDEX IF NOT EXISTS recon_asset_sources_asset
+        ON recon_asset_sources(asset_id, discovered_at);
+      CREATE TABLE IF NOT EXISTS recon_http_results (
+        id TEXT PRIMARY KEY,
+        asset_id TEXT NOT NULL REFERENCES recon_assets(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL REFERENCES recon_runs(id) ON DELETE CASCADE,
+        tool_run_id TEXT NOT NULL REFERENCES recon_tool_runs(id) ON DELETE CASCADE,
+        input TEXT NOT NULL,
+        url TEXT NOT NULL,
+        host TEXT NOT NULL,
+        port INTEGER,
+        scheme TEXT,
+        status_code INTEGER,
+        content_length INTEGER,
+        title TEXT,
+        technologies_json TEXT NOT NULL DEFAULT '[]',
+        web_server TEXT,
+        content_type TEXT,
+        final_url TEXT,
+        ip TEXT,
+        cname TEXT,
+        response_time TEXT,
+        raw_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(tool_run_id, url)
+      );
+      CREATE INDEX IF NOT EXISTS recon_http_results_run_status
+        ON recon_http_results(run_id, status_code);
+      CREATE TABLE IF NOT EXISTS recon_artifact_links (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES recon_runs(id) ON DELETE CASCADE,
+        tool_run_id TEXT REFERENCES recon_tool_runs(id) ON DELETE CASCADE,
+        artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK(role IN ('raw','parsed','metadata','combined','httpx','failed-inputs','ai-review')),
+        created_at TEXT NOT NULL,
+        UNIQUE(artifact_id, role)
+      );
+      CREATE INDEX IF NOT EXISTS recon_artifact_links_run
+        ON recon_artifact_links(run_id, tool_run_id);
+      CREATE TABLE IF NOT EXISTS asset_interest (
+        id TEXT PRIMARY KEY,
+        asset_id TEXT NOT NULL REFERENCES recon_assets(id) ON DELETE CASCADE,
+        score INTEGER NOT NULL CHECK(score BETWEEN 0 AND 100),
+        reasons_json TEXT NOT NULL,
+        marked_by TEXT NOT NULL CHECK(marked_by IN ('user','ai')),
+        review_status TEXT NOT NULL CHECK(review_status IN ('new','reviewing','dismissed','promoted')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS asset_interest_asset_status
+        ON asset_interest(asset_id, review_status, score DESC);
+      CREATE TABLE IF NOT EXISTS ai_reviews (
+        id TEXT PRIMARY KEY,
+        engagement_id TEXT NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        run_id TEXT REFERENCES recon_runs(id) ON DELETE SET NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending_approval','running','completed','failed','cancelled')),
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        input_artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+        input_asset_ids_json TEXT NOT NULL DEFAULT '[]',
+        input_hashes_json TEXT NOT NULL DEFAULT '[]',
+        redacted_preview TEXT NOT NULL,
+        payload_bytes INTEGER NOT NULL,
+        response_artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        approved_at TEXT,
+        completed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS ai_reviews_session_created
+        ON ai_reviews(session_id, created_at DESC);
     `);
     this.migrateActionProposalActions();
     const sessionColumns = this.db.prepare('PRAGMA table_info(sessions)').all() as Array<{
@@ -266,7 +402,7 @@ export class WebDatabase {
     // A process died while running these turns; do not present them as live
     // after restart and never preserve an in-memory approval implicitly.
     this.db.exec(
-      "UPDATE sessions SET state = 'error' WHERE state = 'running'; UPDATE turns SET status = 'error', completed_at = datetime('now') WHERE status = 'running'; UPDATE action_proposals SET status = 'failed', error = 'server restarted during execution', updated_at = datetime('now') WHERE status = 'running'; UPDATE recon_runs SET status = 'failed', completed_at = datetime('now'), summary_json = '{\"error\":\"server restarted during recon\"}' WHERE status IN ('queued','running'); UPDATE recon_steps SET status = 'failed', detail = 'server restarted during recon', completed_at = datetime('now') WHERE status = 'running';",
+      "UPDATE sessions SET state = 'error' WHERE state = 'running'; UPDATE turns SET status = 'error', completed_at = datetime('now') WHERE status = 'running'; UPDATE action_proposals SET status = 'failed', error = 'server restarted during execution', updated_at = datetime('now') WHERE status = 'running'; UPDATE recon_runs SET status = 'failed', completed_at = datetime('now'), summary_json = '{\"error\":\"server restarted during recon\",\"partialResultsPreserved\":true}' WHERE status IN ('queued','running'); UPDATE recon_steps SET status = 'failed', detail = 'server restarted during recon; completed artifacts remain available', completed_at = datetime('now') WHERE status = 'running'; UPDATE recon_tool_runs SET status = 'failed', error = 'server restarted during tool execution; partial artifacts remain available', ended_at = datetime('now'), updated_at = datetime('now') WHERE status IN ('queued','running','saving'); UPDATE ai_reviews SET status = 'failed', error = 'server restarted during AI review', completed_at = datetime('now') WHERE status = 'running';",
     );
   }
 
@@ -968,6 +1104,440 @@ export class WebDatabase {
     ).map(reconInsightFromRow);
   }
 
+  createReconToolRun(input: {
+    reconRunId: string;
+    engagementId: string;
+    sessionId: string;
+    tool: string;
+    actionName: string;
+    metadata?: Record<string, unknown>;
+  }): ReconToolRunRecord {
+    const now = new Date().toISOString();
+    const id = randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO recon_tool_runs
+        (id, recon_run_id, engagement_id, session_id, tool, action_name, status,
+         artifact_ids_json, metadata_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'queued', '[]', ?, ?, ?)`,
+      )
+      .run(
+        id,
+        input.reconRunId,
+        input.engagementId,
+        input.sessionId,
+        input.tool,
+        input.actionName,
+        JSON.stringify(input.metadata ?? {}),
+        now,
+        now,
+      );
+    return this.getReconToolRun(id) as ReconToolRunRecord;
+  }
+
+  updateReconToolRun(
+    id: string,
+    status: ReconToolRunStatus,
+    input: {
+      exitCode?: number;
+      rawResults?: number;
+      validResults?: number;
+      uniqueResults?: number;
+      artifactIds?: string[];
+      error?: string;
+      partialStdout?: string;
+      partialStderr?: string;
+      metadata?: Record<string, unknown>;
+    } = {},
+  ): ReconToolRunRecord {
+    const now = new Date().toISOString();
+    const startedAt = status === 'running' ? now : null;
+    const endedAt = ['completed', 'failed', 'cancelled', 'timed_out'].includes(status) ? now : null;
+    const result = this.db
+      .prepare(
+        `UPDATE recon_tool_runs SET status = ?,
+         started_at = COALESCE(started_at, ?), ended_at = COALESCE(?, ended_at),
+         exit_code = COALESCE(?, exit_code),
+         raw_results = COALESCE(?, raw_results),
+         valid_results = COALESCE(?, valid_results),
+         unique_results = COALESCE(?, unique_results),
+         artifact_ids_json = COALESCE(?, artifact_ids_json),
+         error = COALESCE(?, error),
+         partial_stdout = COALESCE(?, partial_stdout),
+         partial_stderr = COALESCE(?, partial_stderr),
+         metadata_json = COALESCE(?, metadata_json),
+         updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        status,
+        startedAt,
+        endedAt,
+        input.exitCode ?? null,
+        input.rawResults ?? null,
+        input.validResults ?? null,
+        input.uniqueResults ?? null,
+        input.artifactIds ? JSON.stringify(input.artifactIds) : null,
+        input.error ?? null,
+        input.partialStdout ?? null,
+        input.partialStderr ?? null,
+        input.metadata ? JSON.stringify(input.metadata) : null,
+        now,
+        id,
+      );
+    if (Number(result.changes) !== 1) throw new Error('recon tool run not found');
+    return this.getReconToolRun(id) as ReconToolRunRecord;
+  }
+
+  getReconToolRun(id: string): ReconToolRunRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM recon_tool_runs WHERE id = ?').get(id) as
+      | SqlRow
+      | undefined;
+    return row ? reconToolRunFromRow(row) : undefined;
+  }
+
+  listReconToolRuns(runId: string): ReconToolRunRecord[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM recon_tool_runs WHERE recon_run_id = ? ORDER BY created_at')
+        .all(runId) as SqlRow[]
+    ).map(reconToolRunFromRow);
+  }
+
+  upsertReconAsset(input: {
+    engagementId: string;
+    sessionId: string;
+    runId: string;
+    value: string;
+    normalizedValue: string;
+    type: ReconAsset['type'];
+    inScope: boolean;
+    activeTestingAllowed: boolean;
+    source: {
+      tool: string;
+      toolRunId: string;
+      artifactId?: string;
+      rawValue: string;
+      discoveredAt?: string;
+    };
+  }): { asset: ReconAsset; created: boolean; sourceCreated: boolean } {
+    const now = input.source.discoveredAt ?? new Date().toISOString();
+    const id = randomUUID();
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const inserted = this.db
+        .prepare(
+          `INSERT INTO recon_assets
+          (id, engagement_id, session_id, run_id, value, normalized_value, type,
+           in_scope, active_testing_allowed, first_seen_at, last_seen_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(run_id, normalized_value) DO UPDATE SET
+            last_seen_at = excluded.last_seen_at,
+            in_scope = MAX(recon_assets.in_scope, excluded.in_scope),
+            active_testing_allowed = MAX(recon_assets.active_testing_allowed, excluded.active_testing_allowed)`,
+        )
+        .run(
+          id,
+          input.engagementId,
+          input.sessionId,
+          input.runId,
+          input.value,
+          input.normalizedValue,
+          input.type,
+          input.inScope ? 1 : 0,
+          input.activeTestingAllowed ? 1 : 0,
+          now,
+          now,
+        );
+      const row = this.db
+        .prepare('SELECT id FROM recon_assets WHERE run_id = ? AND normalized_value = ?')
+        .get(input.runId, input.normalizedValue) as { id: string };
+      const sourceId = randomUUID();
+      const sourceInserted = this.db
+        .prepare(
+          `INSERT OR IGNORE INTO recon_asset_sources
+          (id, asset_id, tool, run_id, tool_run_id, artifact_id, raw_value, discovered_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          sourceId,
+          row.id,
+          input.source.tool,
+          input.runId,
+          input.source.toolRunId,
+          input.source.artifactId ?? null,
+          input.source.rawValue,
+          now,
+        );
+      this.db.exec('COMMIT');
+      const asset = this.getReconAsset(row.id);
+      if (!asset) throw new Error('recon asset was not persisted');
+      return {
+        asset,
+        created: Number(inserted.changes) === 1 && row.id === id,
+        sourceCreated: Number(sourceInserted.changes) === 1,
+      };
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  getReconAsset(id: string): ReconAsset | undefined {
+    const row = this.db.prepare('SELECT * FROM recon_assets WHERE id = ?').get(id) as
+      | SqlRow
+      | undefined;
+    return row ? reconAssetFromRow(row, this.listReconAssetSources(id)) : undefined;
+  }
+
+  findReconAsset(runId: string, normalizedValue: string): ReconAsset | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM recon_assets WHERE run_id = ? AND normalized_value = ?')
+      .get(runId, normalizedValue) as SqlRow | undefined;
+    return row ? reconAssetFromRow(row, this.listReconAssetSources(String(row.id))) : undefined;
+  }
+
+  listReconAssets(sessionId: string, runId?: string): ReconAsset[] {
+    const rows = runId
+      ? this.db
+          .prepare(
+            'SELECT * FROM recon_assets WHERE session_id = ? AND run_id = ? ORDER BY normalized_value',
+          )
+          .all(sessionId, runId)
+      : this.db
+          .prepare('SELECT * FROM recon_assets WHERE session_id = ? ORDER BY last_seen_at DESC')
+          .all(sessionId);
+    return (rows as SqlRow[]).map((row) =>
+      reconAssetFromRow(row, this.listReconAssetSources(String(row.id))),
+    );
+  }
+
+  private listReconAssetSources(assetId: string): ReconAssetSource[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM recon_asset_sources WHERE asset_id = ? ORDER BY discovered_at')
+        .all(assetId) as SqlRow[]
+    ).map(reconAssetSourceFromRow);
+  }
+
+  updateReconAssetDns(id: string, dns: NonNullable<ReconAsset['dns']>): ReconAsset {
+    this.db
+      .prepare('UPDATE recon_assets SET dns_json = ?, last_seen_at = ? WHERE id = ?')
+      .run(JSON.stringify(dns), new Date().toISOString(), id);
+    const asset = this.getReconAsset(id);
+    if (!asset) throw new Error('recon asset not found');
+    return asset;
+  }
+
+  updateReconAssetHttp(id: string, http: NonNullable<ReconAsset['http']>): ReconAsset {
+    this.db
+      .prepare('UPDATE recon_assets SET http_json = ?, last_seen_at = ? WHERE id = ?')
+      .run(JSON.stringify(http), new Date().toISOString(), id);
+    const asset = this.getReconAsset(id);
+    if (!asset) throw new Error('recon asset not found');
+    return asset;
+  }
+
+  addReconHttpResult(input: Omit<ReconHttpResult, 'id' | 'createdAt'>): ReconHttpResult {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO recon_http_results
+        (id, asset_id, run_id, tool_run_id, input, url, host, port, scheme, status_code,
+         content_length, title, technologies_json, web_server, content_type, final_url,
+         ip, cname, response_time, raw_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tool_run_id, url) DO UPDATE SET
+          status_code = excluded.status_code, title = excluded.title,
+          technologies_json = excluded.technologies_json, raw_json = excluded.raw_json`,
+      )
+      .run(
+        id,
+        input.assetId,
+        input.runId,
+        input.toolRunId,
+        input.input,
+        input.url,
+        input.host,
+        input.port ?? null,
+        input.scheme ?? null,
+        input.statusCode ?? null,
+        input.contentLength ?? null,
+        input.title ?? null,
+        JSON.stringify(input.technologies),
+        input.webServer ?? null,
+        input.contentType ?? null,
+        input.finalUrl ?? null,
+        input.ip ?? null,
+        input.cname ?? null,
+        input.responseTime ?? null,
+        JSON.stringify(input.raw),
+        now,
+      );
+    const row = this.db
+      .prepare('SELECT * FROM recon_http_results WHERE tool_run_id = ? AND url = ?')
+      .get(input.toolRunId, input.url) as SqlRow;
+    return reconHttpResultFromRow(row);
+  }
+
+  listReconHttpResults(runId: string): ReconHttpResult[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM recon_http_results WHERE run_id = ? ORDER BY url')
+        .all(runId) as SqlRow[]
+    ).map(reconHttpResultFromRow);
+  }
+
+  linkReconArtifact(input: {
+    runId: string;
+    toolRunId?: string;
+    artifactId: string;
+    role: ReconArtifactLink['role'];
+  }): ReconArtifactLink {
+    const record: ReconArtifactLink = {
+      id: randomUUID(),
+      runId: input.runId,
+      toolRunId: input.toolRunId,
+      artifactId: input.artifactId,
+      role: input.role,
+      createdAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO recon_artifact_links
+        (id, run_id, tool_run_id, artifact_id, role, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.runId,
+        record.toolRunId ?? null,
+        record.artifactId,
+        record.role,
+        record.createdAt,
+      );
+    return record;
+  }
+
+  listReconArtifactLinks(runId: string): ReconArtifactLink[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM recon_artifact_links WHERE run_id = ? ORDER BY created_at')
+        .all(runId) as SqlRow[]
+    ).map(reconArtifactLinkFromRow);
+  }
+
+  addAssetInterest(input: Omit<AssetInterest, 'id' | 'createdAt' | 'updatedAt'>): AssetInterest {
+    const now = new Date().toISOString();
+    const record: AssetInterest = { ...input, id: randomUUID(), createdAt: now, updatedAt: now };
+    this.db
+      .prepare(
+        `INSERT INTO asset_interest
+        (id, asset_id, score, reasons_json, marked_by, review_status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.assetId,
+        record.score,
+        JSON.stringify(record.reasons),
+        record.markedBy,
+        record.reviewStatus,
+        now,
+        now,
+      );
+    return record;
+  }
+
+  listAssetInterest(assetId: string): AssetInterest[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM asset_interest WHERE asset_id = ? ORDER BY created_at DESC')
+        .all(assetId) as SqlRow[]
+    ).map(assetInterestFromRow);
+  }
+
+  createAIReview(
+    input: Omit<
+      AIReviewRecord,
+      'id' | 'createdAt' | 'approvedAt' | 'completedAt' | 'responseArtifactId' | 'error'
+    >,
+  ): AIReviewRecord {
+    const record: AIReviewRecord = {
+      ...input,
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO ai_reviews
+        (id, engagement_id, session_id, run_id, status, provider, model, objective,
+         input_artifact_ids_json, input_asset_ids_json, input_hashes_json,
+         redacted_preview, payload_bytes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.id,
+        record.engagementId,
+        record.sessionId,
+        record.runId ?? null,
+        record.status,
+        record.provider,
+        record.model,
+        record.objective,
+        JSON.stringify(record.inputArtifactIds),
+        JSON.stringify(record.inputAssetIds),
+        JSON.stringify(record.inputHashes),
+        record.redactedPreview,
+        record.payloadBytes,
+        record.createdAt,
+      );
+    return record;
+  }
+
+  listAIReviews(sessionId: string): AIReviewRecord[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM ai_reviews WHERE session_id = ? ORDER BY created_at DESC')
+        .all(sessionId) as SqlRow[]
+    ).map(aiReviewFromRow);
+  }
+
+  getAIReview(id: string): AIReviewRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM ai_reviews WHERE id = ?').get(id) as
+      | SqlRow
+      | undefined;
+    return row ? aiReviewFromRow(row) : undefined;
+  }
+
+  updateAIReview(
+    id: string,
+    status: AIReviewRecord['status'],
+    input: { responseArtifactId?: string; error?: string; approved?: boolean } = {},
+  ): AIReviewRecord {
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE ai_reviews SET status = ?,
+         response_artifact_id = COALESCE(?, response_artifact_id),
+         error = COALESCE(?, error),
+         approved_at = COALESCE(?, approved_at),
+         completed_at = COALESCE(?, completed_at)
+         WHERE id = ?`,
+      )
+      .run(
+        status,
+        input.responseArtifactId ?? null,
+        input.error ?? null,
+        input.approved ? now : null,
+        ['completed', 'failed', 'cancelled'].includes(status) ? now : null,
+        id,
+      );
+    if (Number(result.changes) !== 1) throw new Error('AI review not found');
+    return this.getAIReview(id) as AIReviewRecord;
+  }
+
   getLegacyImport(sourceSha256: string): { sessionId: string; importedAt: string } | undefined {
     const row = this.db
       .prepare('SELECT session_id, imported_at FROM legacy_imports WHERE source_sha256 = ?')
@@ -1031,6 +1601,12 @@ export class WebDatabase {
       findings: this.listFindings(sessionId),
       coverage: this.listCoverage(sessionId),
       reconRuns: this.listReconRuns(sessionId),
+      reconToolRuns: this.listReconRuns(sessionId).flatMap((run) => this.listReconToolRuns(run.id)),
+      reconAssets: this.listReconAssets(sessionId),
+      reconHttpResults: this.listReconRuns(sessionId).flatMap((run) =>
+        this.listReconHttpResults(run.id),
+      ),
+      aiReviews: this.listAIReviews(sessionId),
     };
   }
 
@@ -1038,6 +1614,7 @@ export class WebDatabase {
     if (!this.getSession(sessionId)) throw new Error('session not found');
     this.db.exec('BEGIN IMMEDIATE');
     try {
+      this.db.prepare('DELETE FROM ai_reviews WHERE session_id = ?').run(sessionId);
       this.db.prepare('DELETE FROM recon_insights WHERE session_id = ?').run(sessionId);
       this.db
         .prepare(
@@ -1232,5 +1809,139 @@ function reconInsightFromRow(r: SqlRow): ReconInsightRecord {
     sourceStep: r.source_step ? String(r.source_step) : undefined,
     createdAt: String(r.created_at),
     updatedAt: String(r.updated_at),
+  };
+}
+
+function reconToolRunFromRow(r: SqlRow): ReconToolRunRecord {
+  return {
+    id: String(r.id),
+    reconRunId: String(r.recon_run_id),
+    engagementId: String(r.engagement_id),
+    sessionId: String(r.session_id),
+    tool: String(r.tool),
+    actionName: String(r.action_name),
+    status: String(r.status) as ReconToolRunStatus,
+    startedAt: r.started_at ? String(r.started_at) : undefined,
+    endedAt: r.ended_at ? String(r.ended_at) : undefined,
+    exitCode: r.exit_code === null || r.exit_code === undefined ? undefined : Number(r.exit_code),
+    rawResults: Number(r.raw_results),
+    validResults: Number(r.valid_results),
+    uniqueResults: Number(r.unique_results),
+    artifactIds: JSON.parse(String(r.artifact_ids_json)) as string[],
+    error: r.error ? String(r.error) : undefined,
+    partialStdout: r.partial_stdout ? String(r.partial_stdout) : undefined,
+    partialStderr: r.partial_stderr ? String(r.partial_stderr) : undefined,
+    metadata: JSON.parse(String(r.metadata_json)),
+    createdAt: String(r.created_at),
+    updatedAt: String(r.updated_at),
+  };
+}
+
+function reconAssetFromRow(r: SqlRow, sources: ReconAssetSource[]): ReconAsset {
+  return {
+    id: String(r.id),
+    engagementId: String(r.engagement_id),
+    sessionId: String(r.session_id),
+    runId: String(r.run_id),
+    value: String(r.value),
+    normalizedValue: String(r.normalized_value),
+    type: String(r.type) as ReconAsset['type'],
+    sources,
+    inScope: Boolean(r.in_scope),
+    activeTestingAllowed: Boolean(r.active_testing_allowed),
+    firstSeenAt: String(r.first_seen_at),
+    lastSeenAt: String(r.last_seen_at),
+    dns: r.dns_json ? (JSON.parse(String(r.dns_json)) as ReconAsset['dns']) : undefined,
+    http: r.http_json ? (JSON.parse(String(r.http_json)) as ReconAsset['http']) : undefined,
+  };
+}
+
+function reconAssetSourceFromRow(r: SqlRow): ReconAssetSource {
+  return {
+    id: String(r.id),
+    assetId: String(r.asset_id),
+    tool: String(r.tool),
+    runId: String(r.run_id),
+    toolRunId: String(r.tool_run_id),
+    artifactId: r.artifact_id ? String(r.artifact_id) : undefined,
+    rawValue: String(r.raw_value),
+    discoveredAt: String(r.discovered_at),
+  };
+}
+
+function reconHttpResultFromRow(r: SqlRow): ReconHttpResult {
+  return {
+    id: String(r.id),
+    assetId: String(r.asset_id),
+    runId: String(r.run_id),
+    toolRunId: String(r.tool_run_id),
+    input: String(r.input),
+    url: String(r.url),
+    host: String(r.host),
+    port: r.port === null || r.port === undefined ? undefined : Number(r.port),
+    scheme: r.scheme ? String(r.scheme) : undefined,
+    statusCode:
+      r.status_code === null || r.status_code === undefined ? undefined : Number(r.status_code),
+    contentLength:
+      r.content_length === null || r.content_length === undefined
+        ? undefined
+        : Number(r.content_length),
+    title: r.title ? String(r.title) : undefined,
+    technologies: JSON.parse(String(r.technologies_json)) as string[],
+    webServer: r.web_server ? String(r.web_server) : undefined,
+    contentType: r.content_type ? String(r.content_type) : undefined,
+    finalUrl: r.final_url ? String(r.final_url) : undefined,
+    ip: r.ip ? String(r.ip) : undefined,
+    cname: r.cname ? String(r.cname) : undefined,
+    responseTime: r.response_time ? String(r.response_time) : undefined,
+    raw: JSON.parse(String(r.raw_json)),
+    createdAt: String(r.created_at),
+  };
+}
+
+function reconArtifactLinkFromRow(r: SqlRow): ReconArtifactLink {
+  return {
+    id: String(r.id),
+    runId: String(r.run_id),
+    toolRunId: r.tool_run_id ? String(r.tool_run_id) : undefined,
+    artifactId: String(r.artifact_id),
+    role: String(r.role) as ReconArtifactLink['role'],
+    createdAt: String(r.created_at),
+  };
+}
+
+function assetInterestFromRow(r: SqlRow): AssetInterest {
+  return {
+    id: String(r.id),
+    assetId: String(r.asset_id),
+    score: Number(r.score),
+    reasons: JSON.parse(String(r.reasons_json)) as string[],
+    markedBy: String(r.marked_by) as AssetInterest['markedBy'],
+    reviewStatus: String(r.review_status) as AssetInterest['reviewStatus'],
+    createdAt: String(r.created_at),
+    updatedAt: String(r.updated_at),
+  };
+}
+
+function aiReviewFromRow(r: SqlRow): AIReviewRecord {
+  return {
+    id: String(r.id),
+    engagementId: String(r.engagement_id),
+    sessionId: String(r.session_id),
+    runId: r.run_id ? String(r.run_id) : undefined,
+    status: String(r.status) as AIReviewRecord['status'],
+    provider: String(r.provider) as WebProviderId,
+    model: String(r.model),
+    objective: String(r.objective),
+    inputArtifactIds: JSON.parse(String(r.input_artifact_ids_json)) as string[],
+    inputAssetIds: JSON.parse(String(r.input_asset_ids_json)) as string[],
+    inputHashes: JSON.parse(String(r.input_hashes_json)) as string[],
+    redactedPreview: String(r.redacted_preview),
+    payloadBytes: Number(r.payload_bytes),
+    responseArtifactId: r.response_artifact_id ? String(r.response_artifact_id) : undefined,
+    error: r.error ? String(r.error) : undefined,
+    createdAt: String(r.created_at),
+    approvedAt: r.approved_at ? String(r.approved_at) : undefined,
+    completedAt: r.completed_at ? String(r.completed_at) : undefined,
   };
 }

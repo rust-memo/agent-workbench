@@ -35,13 +35,21 @@ export class ArtifactStore {
     mediaType?: string;
     body: string | Uint8Array;
     metadata?: Record<string, unknown>;
+    /**
+     * Optional server-owned path segments. Callers must use fixed identifiers
+     * (engagement/run/tool), never arbitrary scanner or model output.
+     */
+    directory?: string[];
   }): Promise<ArtifactRecord> {
     const id = randomUUID();
     const safeName =
       basename(input.filename)
         .replace(/[^a-zA-Z0-9._-]/g, '_')
         .slice(0, 120) || 'artifact.txt';
-    const relativePath = `${input.engagementId}/${input.sessionId}/${id}-${safeName}`;
+    const directory = input.directory?.map(safePathSegment);
+    const relativePath = directory
+      ? `${directory.join('/')}/${safeName}`
+      : `${input.engagementId}/${input.sessionId}/${id}-${safeName}`;
     const finalPath = this.resolveStoredPath(relativePath);
     mkdirSync(resolve(finalPath, '..'), { recursive: true, mode: 0o700 });
     const tmpPath = `${finalPath}.tmp`;
@@ -197,9 +205,18 @@ export class ArtifactStore {
   }
 }
 
+function safePathSegment(value: string): string {
+  if (!/^[a-zA-Z0-9._-]{1,120}$/.test(value) || value === '.' || value === '..')
+    throw new Error('invalid server-owned artifact directory');
+  return value;
+}
+
 function serverMediaType(filename: string, hint?: string): string {
   if (filename.endsWith('.json')) return 'application/json';
   if (filename.endsWith('.jsonl')) return 'application/x-ndjson';
+  if (filename.endsWith('.csv')) return 'text/csv; charset=utf-8';
+  if (filename.endsWith('.xml')) return 'application/xml';
+  if (filename.endsWith('.md')) return 'text/markdown; charset=utf-8';
   if (filename.endsWith('.txt') || filename.endsWith('.log')) return 'text/plain; charset=utf-8';
   return hint === 'application/json' ? hint : 'application/octet-stream';
 }

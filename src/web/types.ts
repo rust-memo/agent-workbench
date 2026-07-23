@@ -192,3 +192,143 @@ export interface ReconRunRecord {
   steps: ReconStepRecord[];
   insights: ReconInsightRecord[];
 }
+
+export type ReconToolRunStatus =
+  | 'queued'
+  | 'running'
+  | 'saving'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed_out';
+
+export type ReconAssetType = 'domain' | 'subdomain' | 'url' | 'ip';
+
+export interface ReconAssetSource {
+  id: string;
+  assetId: string;
+  tool: string;
+  runId: string;
+  toolRunId: string;
+  artifactId?: string;
+  rawValue: string;
+  discoveredAt: string;
+}
+
+export interface ReconAsset {
+  id: string;
+  engagementId: string;
+  sessionId: string;
+  runId: string;
+  value: string;
+  normalizedValue: string;
+  type: ReconAssetType;
+  sources: ReconAssetSource[];
+  inScope: boolean;
+  activeTestingAllowed: boolean;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  dns?: {
+    resolved: boolean;
+    addresses: string[];
+    cname?: string;
+  };
+  http?: {
+    probed: boolean;
+    live: boolean;
+    finalUrl?: string;
+    statusCode?: number;
+    title?: string;
+    technologies?: string[];
+    contentType?: string;
+    webServer?: string;
+  };
+}
+
+export interface ReconToolRunRecord {
+  id: string;
+  reconRunId: string;
+  engagementId: string;
+  sessionId: string;
+  tool: string;
+  actionName: string;
+  status: ReconToolRunStatus;
+  startedAt?: string;
+  endedAt?: string;
+  exitCode?: number;
+  rawResults: number;
+  validResults: number;
+  uniqueResults: number;
+  artifactIds: string[];
+  error?: string;
+  partialStdout?: string;
+  partialStderr?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReconHttpResult {
+  id: string;
+  assetId: string;
+  runId: string;
+  toolRunId: string;
+  input: string;
+  url: string;
+  host: string;
+  port?: number;
+  scheme?: string;
+  statusCode?: number;
+  contentLength?: number;
+  title?: string;
+  technologies: string[];
+  webServer?: string;
+  contentType?: string;
+  finalUrl?: string;
+  ip?: string;
+  cname?: string;
+  responseTime?: string;
+  raw: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface ReconArtifactLink {
+  id: string;
+  runId: string;
+  toolRunId?: string;
+  artifactId: string;
+  role: 'raw' | 'parsed' | 'metadata' | 'combined' | 'httpx' | 'failed-inputs' | 'ai-review';
+  createdAt: string;
+}
+
+export interface AssetInterest {
+  id: string;
+  assetId: string;
+  score: number;
+  reasons: string[];
+  markedBy: 'user' | 'ai';
+  reviewStatus: 'new' | 'reviewing' | 'dismissed' | 'promoted';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AIReviewRecord {
+  id: string;
+  engagementId: string;
+  sessionId: string;
+  runId?: string;
+  status: 'pending_approval' | 'running' | 'completed' | 'failed' | 'cancelled';
+  provider: WebProviderId;
+  model: string;
+  objective: string;
+  inputArtifactIds: string[];
+  inputAssetIds: string[];
+  inputHashes: string[];
+  redactedPreview: string;
+  payloadBytes: number;
+  responseArtifactId?: string;
+  error?: string;
+  createdAt: string;
+  approvedAt?: string;
+  completedAt?: string;
+}

@@ -102,8 +102,22 @@ export class SubfinderTool implements Tool {
     );
     if (!discoveryAllowed) throw new Error('subfinder domain is outside the approved scope');
     const result = await this.runner.subfinder(domain, scope.limits, signal);
-    if (result.exitCode !== 0)
-      throw new Error(`subfinder exited ${result.exitCode}: ${result.stderr.slice(0, 1000)}`);
+    const rawArtifact = await this.artifacts.save({
+      engagementId: this.context.engagementId,
+      sessionId: this.context.sessionId,
+      turnId: this.context.turnId(),
+      kind: 'discovered-assets-raw',
+      filename: 'subfinder-raw.txt',
+      mediaType: 'text/plain; charset=utf-8',
+      body: result.stdout ? `${result.stdout.replace(/\s+$/, '')}\n` : '',
+      metadata: {
+        tool: 'subfinder',
+        domain,
+        exitCode: result.exitCode,
+        termination: result.termination,
+        partial: result.exitCode !== 0,
+      },
+    });
     const assets = [
       ...new Set(
         result.stdout
@@ -123,10 +137,17 @@ export class SubfinderTool implements Tool {
       metadata: {
         tool: 'subfinder',
         domain,
+        rawArtifactId: rawArtifact.id,
+        exitCode: result.exitCode,
+        partial: result.exitCode !== 0,
         total: assets.length,
         inScope: assets.filter((a) => a.inScope).length,
       },
     });
+    if (result.exitCode !== 0)
+      throw new Error(
+        `subfinder exited ${result.exitCode}; partial artifacts ${rawArtifact.id} and ${artifact.id} were saved: ${result.stderr.slice(0, 1000)}`,
+      );
     return JSON.stringify({
       artifactId: artifact.id,
       total: assets.length,
@@ -213,8 +234,6 @@ export class HttpxTool implements Tool {
       scope.limits,
       signal,
     );
-    if (result.exitCode !== 0)
-      throw new Error(`httpx exited ${result.exitCode}: ${result.stderr.slice(0, 1000)}`);
     const observations = result.stdout
       .split(/\r?\n/)
       .filter(Boolean)
@@ -240,8 +259,19 @@ export class HttpxTool implements Tool {
       filename: 'httpx-results.json',
       mediaType: 'application/json',
       body: `${JSON.stringify(observations, null, 2)}\n`,
-      metadata: { tool: 'httpx', targets: targets.length },
+      metadata: {
+        tool: 'httpx',
+        targets: targets.length,
+        exitCode: result.exitCode,
+        termination: result.termination,
+        partial: result.exitCode !== 0,
+        stderr: result.exitCode === 0 ? undefined : result.stderr.slice(0, 20_000),
+      },
     });
+    if (result.exitCode !== 0)
+      throw new Error(
+        `httpx exited ${result.exitCode}; partial artifact ${artifact.id} was saved: ${result.stderr.slice(0, 1000)}`,
+      );
     return JSON.stringify({
       artifactId: artifact.id,
       targets: targets.length,
@@ -307,8 +337,6 @@ export class DnsxTool implements Tool {
     if (!targets.length)
       throw new Error('input artifact contains no hosts authorized for DNS recon');
     const result = await this.runner.dnsx(targets, scope.limits, signal);
-    if (result.exitCode !== 0)
-      throw new Error(`dnsx exited ${result.exitCode}: ${result.stderr.slice(0, 1000)}`);
     const rows = result.stdout
       .split(/\r?\n/)
       .filter(Boolean)
@@ -327,7 +355,15 @@ export class DnsxTool implements Tool {
       filename: 'dnsx-results.json',
       mediaType: 'application/json',
       body: `${JSON.stringify(rows, null, 2)}\n`,
-      metadata: { tool: 'dnsx', targets: targets.length, scannerIsolation: 'docker' },
+      metadata: {
+        tool: 'dnsx',
+        targets: targets.length,
+        scannerIsolation: 'docker',
+        exitCode: result.exitCode,
+        termination: result.termination,
+        partial: result.exitCode !== 0,
+        stderr: result.exitCode === 0 ? undefined : result.stderr.slice(0, 20_000),
+      },
     });
     for (const host of targets) {
       this.database.upsertCoverage({
@@ -341,6 +377,10 @@ export class DnsxTool implements Tool {
         source: 'dnsx',
       });
     }
+    if (result.exitCode !== 0)
+      throw new Error(
+        `dnsx exited ${result.exitCode}; partial artifact ${artifact.id} was saved: ${result.stderr.slice(0, 1000)}`,
+      );
     return JSON.stringify({
       artifactId: artifact.id,
       targets: targets.length,
