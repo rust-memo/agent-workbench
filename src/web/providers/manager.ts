@@ -17,13 +17,13 @@ import {
 } from './cli.js';
 
 export class WebProviderManager {
-  readonly qwenPath = process.env.PENTESTERFLOW_QWEN_PATH ?? siblingCliPath('qwen');
-  readonly codexPath = process.env.PENTESTERFLOW_CODEX_PATH ?? siblingCliPath('codex');
-  readonly claudePath = process.env.PENTESTERFLOW_CLAUDE_PATH ?? preferredClaudePath();
+  readonly qwenPath = process.env.AGENT_WORKBENCH_QWEN_PATH ?? siblingCliPath('qwen');
+  readonly codexPath = process.env.AGENT_WORKBENCH_CODEX_PATH ?? siblingCliPath('codex');
+  readonly claudePath = process.env.AGENT_WORKBENCH_CLAUDE_PATH ?? preferredClaudePath();
   readonly openCodePath =
-    process.env.PENTESTERFLOW_OPENCODE_PATH ?? join(homedir(), '.opencode', 'bin', 'opencode');
+    process.env.AGENT_WORKBENCH_OPENCODE_PATH ?? join(homedir(), '.opencode', 'bin', 'opencode');
   readonly openClaudePath =
-    process.env.PENTESTERFLOW_OPENCLAUDE_PATH ??
+    process.env.AGENT_WORKBENCH_OPENCLAUDE_PATH ??
     join(homedir(), '.nvm', 'versions', 'node', 'v22.23.1', 'bin', 'openclaude');
 
   constructor(readonly ollamaBaseURL: string) {}
@@ -55,9 +55,9 @@ export class WebProviderManager {
     if (probe.ready) {
       try {
         const configPath =
-          process.env.PENTESTERFLOW_CODEX_CONFIG ?? join(homedir(), '.codex', 'config.toml');
+          process.env.AGENT_WORKBENCH_CODEX_CONFIG ?? join(homedir(), '.codex', 'config.toml');
         const cachePath =
-          process.env.PENTESTERFLOW_CODEX_MODEL_CACHE ??
+          process.env.AGENT_WORKBENCH_CODEX_MODEL_CACHE ??
           join(homedir(), '.codex', 'models_cache.json');
         const [config, cache] = await Promise.all([
           readFile(configPath, 'utf8').catch(() => ''),
@@ -86,10 +86,10 @@ export class WebProviderManager {
       try {
         if (/openclaude(?:\.cmd)?$/i.test(this.claudePath)) {
           const settingsPath =
-            process.env.PENTESTERFLOW_OPENCLAUDE_SETTINGS ??
+            process.env.AGENT_WORKBENCH_OPENCLAUDE_SETTINGS ??
             join(homedir(), '.openclaude', 'settings.json');
           const cachePath =
-            process.env.PENTESTERFLOW_OPENCLAUDE_MODEL_CACHE ??
+            process.env.AGENT_WORKBENCH_OPENCLAUDE_MODEL_CACHE ??
             join(homedir(), '.openclaude', 'model-discovery-cache.json');
           const [settings, cache] = await Promise.all([
             readJson(settingsPath),
@@ -98,7 +98,7 @@ export class WebProviderManager {
           models = uniqueModels(['default', ...modelsFromOpenClaudeConfig(settings, cache)]);
         } else {
           const settingsPath =
-            process.env.PENTESTERFLOW_CLAUDE_SETTINGS ??
+            process.env.AGENT_WORKBENCH_CLAUDE_SETTINGS ??
             join(homedir(), '.claude', 'settings.json');
           const settings = await readJson(settingsPath).catch(() => undefined);
           const configured = modelsFromClaudeConfig(settings);
@@ -157,7 +157,7 @@ export class WebProviderManager {
     let discoveryError: string | undefined;
     try {
       const settingsPath =
-        process.env.PENTESTERFLOW_QWEN_SETTINGS ?? join(homedir(), '.qwen', 'settings.json');
+        process.env.AGENT_WORKBENCH_QWEN_SETTINGS ?? join(homedir(), '.qwen', 'settings.json');
       models = modelsFromQwenSettings(JSON.parse(await readFile(settingsPath, 'utf8')));
       if (models.length === 0) models = ['default'];
     } catch (error) {
@@ -200,10 +200,10 @@ export class WebProviderManager {
     if (probe.ready) {
       try {
         const settingsPath =
-          process.env.PENTESTERFLOW_OPENCLAUDE_SETTINGS ??
+          process.env.AGENT_WORKBENCH_OPENCLAUDE_SETTINGS ??
           join(homedir(), '.openclaude', 'settings.json');
         const cachePath =
-          process.env.PENTESTERFLOW_OPENCLAUDE_MODEL_CACHE ??
+          process.env.AGENT_WORKBENCH_OPENCLAUDE_MODEL_CACHE ??
           join(homedir(), '.openclaude', 'model-discovery-cache.json');
         const [settings, cache] = await Promise.all([
           readJson(settingsPath),

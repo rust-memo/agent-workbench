@@ -3,10 +3,10 @@ set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 project_dir="$(cd -- "${script_dir}/.." && pwd -P)"
-port="${PENTESTERFLOW_WEB_PORT:-9099}"
+port="${AGENT_WORKBENCH_WEB_PORT:-9099}"
 
 if [[ ! "${port}" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
-  echo "agent-workbench: PENTESTERFLOW_WEB_PORT must be between 1 and 65535." >&2
+  echo "agent-workbench: AGENT_WORKBENCH_WEB_PORT must be between 1 and 65535." >&2
   exit 2
 fi
 
@@ -47,7 +47,7 @@ if [[ -n "${existing_pids}" ]]; then
 
     if [[ "${process_cwd}" != "${project_dir}" || "${process_cmd}" != *"dist/web.js"* ]]; then
       echo "agent-workbench: port ${port} is used by PID ${pid}, which is not this project's Web server." >&2
-      echo "Close that process or choose another PENTESTERFLOW_WEB_PORT." >&2
+      echo "Close that process or choose another AGENT_WORKBENCH_WEB_PORT." >&2
       exit 1
     fi
 

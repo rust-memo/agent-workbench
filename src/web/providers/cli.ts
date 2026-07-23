@@ -51,7 +51,7 @@ abstract class StructuredCliClient implements Client {
       preview: prepared.preview,
       truncated: prepared.truncated,
     });
-    const cwd = await mkdtemp(join(tmpdir(), `pentesterflow-${this.name()}-`));
+    const cwd = await mkdtemp(join(tmpdir(), `agent-workbench-${this.name()}-`));
     try {
       const text = clean(await this.invoke(prompt, cwd, signal)).slice(0, 400_000);
       const parsed = parseStructuredEnvelope(text, req);
@@ -278,7 +278,7 @@ export class OpenClaudeCliClient extends StructuredCliClient {
       '--disable-slash-commands',
       '--no-session-persistence',
       '--settings',
-      process.env.PENTESTERFLOW_OPENCLAUDE_SETTINGS ??
+      process.env.AGENT_WORKBENCH_OPENCLAUDE_SETTINGS ??
         join(homedir(), '.openclaude', 'settings.json'),
     ];
     if (this.modelID && this.modelID !== 'default') args.push('--model', this.modelID);
@@ -315,7 +315,7 @@ export class ClaudeCliClient extends StructuredCliClient {
       args.push(
         '--disable-slash-commands',
         '--settings',
-        process.env.PENTESTERFLOW_OPENCLAUDE_SETTINGS ??
+        process.env.AGENT_WORKBENCH_OPENCLAUDE_SETTINGS ??
           join(homedir(), '.openclaude', 'settings.json'),
       );
     }

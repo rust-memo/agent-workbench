@@ -108,7 +108,7 @@ jobs:
           fi
           # The Bun-compiled binary doesn't run tsup's --define, so it reads
           # the FALLBACK in version.ts. Patch it to the release version so
-          # `pentesterflow --version` reports correctly. No-op if unmatched.
+          # `agent-workbench --version` reports correctly. No-op if unmatched.
           sed -i "s/const FALLBACK = 'dev';/const FALLBACK = '${VER}';/" src/version/version.ts
       - name: Compile standalone binary
         run: |

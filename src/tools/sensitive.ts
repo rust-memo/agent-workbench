@@ -27,7 +27,7 @@ const HOME_RELATIVE = [
   '.docker',
   '.config/gcloud',
   '.config/op',
-  '.pentesterflow',
+  '.agent-workbench',
   '.netrc',
   '.pgpass',
   '.npmrc',

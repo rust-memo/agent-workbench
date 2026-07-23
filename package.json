@@ -1,12 +1,12 @@
 {
-  "name": "@pentesterflow/agent",
+  "name": "@agent-workbench/agent",
   "version": "0.5.0",
   "description": "Local AI security workbench and pentesting CLI with scoped recon, auditable artifacts, and multiple AI providers.",
   "type": "module",
   "bin": {
-    "pentesterflow": "./dist/cli.js",
-    "pentesterflow-browser-mcp": "./dist/browser-mcp.js",
-    "pentesterflow-web": "./dist/web.js"
+    "agent-workbench": "./dist/cli.js",
+    "agent-workbench-browser-mcp": "./dist/browser-mcp.js",
+    "agent-workbench-web": "./dist/web.js"
   },
   "files": [
     "dist",

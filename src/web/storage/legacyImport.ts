@@ -73,7 +73,7 @@ export class LegacySessionImporter {
 
   constructor(
     private readonly database: WebDatabase,
-    root = join(homedir(), '.pentesterflow', 'sessions'),
+    root = join(homedir(), '.agent-workbench', 'sessions'),
   ) {
     this.root = resolve(root);
   }

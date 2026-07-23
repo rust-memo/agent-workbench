@@ -671,7 +671,7 @@ function App(): React.ReactElement {
     return (
       <Centered
         title="Pairing required"
-        detail="Open the single-use URL printed by pentesterflow-web in your terminal."
+        detail="Open the single-use URL printed by agent-workbench-web in your terminal."
         error={error}
       />
     );

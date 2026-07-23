@@ -44,7 +44,7 @@ export class DockerScannerRunner {
     private readonly image = SAFE_SCANNER_IMAGE,
     private readonly dockerBinary = 'docker',
     private readonly rawImage = RAW_SCANNER_IMAGE,
-    private readonly rawEnabled = process.env.PENTESTERFLOW_ENABLE_RAW_SCANNER === '1',
+    private readonly rawEnabled = process.env.AGENT_WORKBENCH_ENABLE_RAW_SCANNER === '1',
   ) {}
 
   rawProfileAvailable(): boolean {
@@ -250,7 +250,7 @@ export class DockerScannerRunner {
   ): Promise<ScannerResult> {
     if (options.raw && !this.rawEnabled)
       throw new Error(
-        'raw-socket scanner profile is disabled; set PENTESTERFLOW_ENABLE_RAW_SCANNER=1 at server startup',
+        'raw-socket scanner profile is disabled; set AGENT_WORKBENCH_ENABLE_RAW_SCANNER=1 at server startup',
       );
     const scanner = options.raw ? 'nmap_raw' : 'nmap_connect';
     return this.run(
@@ -321,7 +321,7 @@ export class DockerScannerRunner {
       : {
           available: false,
           detail:
-            'raw profile disabled; set PENTESTERFLOW_ENABLE_RAW_SCANNER=1 and build scanner:build:raw',
+            'raw profile disabled; set AGENT_WORKBENCH_ENABLE_RAW_SCANNER=1 and build scanner:build:raw',
         };
     const safeNames = [
       'subfinder',

@@ -10,14 +10,14 @@ const nodeMajor = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10
 describe.runIf(nodeMajor >= 22)('Web turn cancellation', () => {
   let root = '';
   let handle: WebServerHandle | undefined;
-  const previousOpenClaude = process.env.PENTESTERFLOW_OPENCLAUDE_PATH;
+  const previousOpenClaude = process.env.AGENT_WORKBENCH_OPENCLAUDE_PATH;
 
   afterEach(async () => {
     await handle?.close();
     handle = undefined;
     if (previousOpenClaude === undefined)
-      Reflect.deleteProperty(process.env, 'PENTESTERFLOW_OPENCLAUDE_PATH');
-    else process.env.PENTESTERFLOW_OPENCLAUDE_PATH = previousOpenClaude;
+      Reflect.deleteProperty(process.env, 'AGENT_WORKBENCH_OPENCLAUDE_PATH');
+    else process.env.AGENT_WORKBENCH_OPENCLAUDE_PATH = previousOpenClaude;
     if (root) await rm(root, { recursive: true, force: true });
     root = '';
   });
@@ -44,7 +44,7 @@ describe.runIf(nodeMajor >= 22)('Web turn cancellation', () => {
       { mode: 0o700 },
     );
     await chmod(providerPath, 0o700);
-    process.env.PENTESTERFLOW_OPENCLAUDE_PATH = providerPath;
+    process.env.AGENT_WORKBENCH_OPENCLAUDE_PATH = providerPath;
 
     handle = await startWebServer({
       port: await freePort(),

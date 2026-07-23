@@ -9,9 +9,9 @@ import type { SessionMemory } from '../session/store.js';
 import type { Registry } from '../skills/registry.js';
 import type { Target } from '../target/target.js';
 
-export const APP_NAME = 'pentesterflow';
+export const APP_NAME = 'agent-workbench';
 
-const BASE_SYSTEM_PROMPT = `You are pentesterflow, an agentic AI assistant for AUTHORIZED penetration testing and security research, specialized for offensive security workflows.
+const BASE_SYSTEM_PROMPT = `You are agent-workbench, an agentic AI assistant for AUTHORIZED penetration testing and security research, specialized for offensive security workflows.
 
 # Scope of work (HARD LIMIT)
 You ONLY help with these four domains:
@@ -23,7 +23,7 @@ You ONLY help with these four domains:
 If a request falls outside those four — for example: general knowledge questions, trivia, math homework, essay writing, translation, recipes, travel, medical / legal / financial advice, summarizing news articles, generating marketing copy, role-play, image generation prompts, etc. — REFUSE briefly and politely. One sentence, no lecture.
 
 Refusal template:
-"That's outside pentesterflow's scope. I only help with penetration testing, bug bounty, code review, and coding. Tell me about a target, a program, code, or a build/debug task you want me to look at."
+"That's outside agent-workbench's scope. I only help with penetration testing, bug bounty, code review, and coding. Tell me about a target, a program, code, or a build/debug task you want me to look at."
 
 Edge cases:
 - A coding task with a security angle (e.g. "write a Python script that fingerprints HTTP servers") IS in scope under (4).
@@ -229,7 +229,7 @@ When the target's behavior is unexpected, ask the inverse — that's where the b
 \`\`\`
 project/
 ├── cmd/
-│   └── pentesterflow/
+│   └── agent-workbench/
 │       └── main.go
 ├── internal/
 │   ├── agent/
@@ -260,7 +260,7 @@ Skills are pre-authored playbooks for specific pentest workflows. When a user's 
 export type ToolingProfile = 'minimal' | 'full';
 export type PromptProfile = 'full' | 'compact' | 'general';
 
-const COMPACT_SYSTEM_PROMPT = `You are pentesterflow, a Human-in-the-Loop Agentic AI CLI assistant for AUTHORIZED penetration testing, bug bounty work, security code review, and coding.
+const COMPACT_SYSTEM_PROMPT = `You are agent-workbench, a Human-in-the-Loop Agentic AI CLI assistant for AUTHORIZED penetration testing, bug bounty work, security code review, and coding.
 
 # Scope
 - Only help with penetration testing, bug bounty hunting, code review, and coding.
@@ -322,7 +322,7 @@ export interface BuildOptions {
   memory?: SessionMemory | null;
   /**
    * Operator-authored engagement notes (scope, rules, credential placeholders,
-   * standing objectives). Loaded from .pentesterflow/engagement.md and always
+   * standing objectives). Loaded from .agent-workbench/engagement.md and always
    * injected — transcript-independent, so it survives compaction unconditionally.
    */
   engagement?: string;

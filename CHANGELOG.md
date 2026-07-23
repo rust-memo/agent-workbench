@@ -10,7 +10,7 @@ All notable changes to this project are documented here. The format is based on
 
 - **Saved memory (`#` quick-add)** — a curated, human-readable memory layer
   modeled on Claude Code. `#<text>` saves a durable fact (one Markdown file per
-  fact with frontmatter, under `.pentesterflow/memory/`); `#!<text>` saves it to
+  fact with frontmatter, under `.agent-workbench/memory/`); `#!<text>` saves it to
   the personal scope. The fact catalog is pinned into the system prompt every
   turn (survives compaction) and the most relevant facts are recalled in full
   per turn, surfaced as a `recalled memory: …` line. Manage with
@@ -27,13 +27,22 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
-- **Self-update hardening** — a pinned `pentesterflow update <version>` now
+- **Unified Agent Workbench identity** — the CLI executables, package name,
+  environment variables, local data directories, logs, Browser MCP service,
+  HTTP bridge headers, UI copy, documentation, and release tooling now use the
+  Agent Workbench name consistently.
+- **Self-update hardening** — a pinned `/update <version>` now
   fetches the installer from that release tag (immutable) instead of `main`, and
   the installer URL is asserted to be https on `raw.githubusercontent.com`
   before fetch.
 
 ### Fixed
 
+- **Release-consistent installer skills** — both installers now resolve
+  `latest` to an immutable release tag before downloading, then stage the
+  binary, checksum, and shipped skills from that same tag. They no longer fall
+  back to `main`, and a skills download failure cannot silently produce a
+  mixed-version installation.
 - **Redaction gaps** — connection-string query-param credentials
   (`?password=` / `&auth=` / `&access_token=`), HTTP Digest `response=` hashes,
   and GCP service-account `private_key_id` are now masked.
@@ -110,11 +119,11 @@ behavior, and making long-running turns legible.
 - **Fail-closed self-update** — the installers (`install.sh`, `install.ps1`)
   now refuse to install a binary they can't SHA-256 verify (missing
   `SHA256SUMS`, missing checksum tool, or mismatch are all fatal). Override with
-  `PENTESTERFLOW_SKIP_CHECKSUM=1`.
+  `AGENT_WORKBENCH_SKIP_CHECKSUM=1`.
 
 ## [0.1.0] - 2026-05-31
 
-First public release of pentesterflow — an agentic offensive-security CLI for
+First public release of agent-workbench — an agentic offensive-security CLI for
 security engineers, professional penetration testers, and bug hunters.
 
 ### Added
@@ -147,9 +156,9 @@ security engineers, professional penetration testers, and bug hunters.
   errors during long assessments.
 - **Gemini provider support** — first-class `gemini` backend, native
   `generateContent` tool-call integration, `GEMINI_API_KEY` loading,
-  interactive API-key setup, recommended PentesterFlow-fit model ordering, and
+  interactive API-key setup, recommended Agent Workbench-fit model ordering, and
   `cheap cost` tags for low-cost Gemini models in the picker.
-- **Burp bridge runtime** — `pentesterflow --burp [port]`, `/burp [port]`, Burp
+- **Burp bridge runtime** — `agent-workbench --burp [port]`, `/burp [port]`, Burp
   task ingestion, issue import endpoints, and Browser Capture tools for reading
   queued Burp requests and confirmed issues from the CLI session.
 - **Context snapshots and session memory** — compacted engagement memory,
@@ -178,7 +187,7 @@ security engineers, professional penetration testers, and bug hunters.
   `AbortSignal` cancellation, error recovery, `@file` mention expansion, and
   session save on every history mutation.
 - **MCP integration** via `@modelcontextprotocol/sdk`, including one-flag Browser
-  MCP and a standalone `pentesterflow-browser-mcp` stdio server with a local
+  MCP and a standalone `agent-workbench-browser-mcp` stdio server with a local
   capture-ingest endpoint.
 - **Findings workflow** — verified bugs written to `./findings/<slug>.md` with a
   copy-pasteable PoC, impact, and remediation.
@@ -187,7 +196,7 @@ security engineers, professional penetration testers, and bug hunters.
 - **Terminal UI** — banner, scrollback transcript, multi-line input with
   bracketed-paste, slash-command completion menu, `@file` mention picker,
   markdown rendering, status bar, and permission / question modals.
-- **Configuration** — zod-validated `~/.pentesterflow/config.json` with
+- **Configuration** — zod-validated `~/.agent-workbench/config.json` with
   crash-safe atomic saves; resumable sessions; structured JSON-lines logs.
 - **Quality** — 300+ unit and integration tests (vitest), typecheck, and lint
   gated by `npm run ci`.

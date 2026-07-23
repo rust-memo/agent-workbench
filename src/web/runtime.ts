@@ -379,12 +379,12 @@ export class WebRuntimeManager {
         return { handled: true };
       case '/burp':
         output(
-          `The Burp bridge runs as a separate loopback service. Start it in a terminal:\npentesterflow --burp${command.args[0] ? ` ${command.args[0]}` : ''}`,
+          `The Burp bridge runs as a separate loopback service. Start it in a terminal:\nagent-workbench --burp${command.args[0] ? ` ${command.args[0]}` : ''}`,
         );
         return { handled: true };
       case '/update':
         output(
-          `Self-update is disabled from the browser. Start pentesterflow in a trusted terminal, then run:\n/update ${command.argumentText || 'latest'}`,
+          `Self-update is disabled from the browser. Start agent-workbench in a trusted terminal, then run:\n/update ${command.argumentText || 'latest'}`,
         );
         return { handled: true };
       case '/yolo':
